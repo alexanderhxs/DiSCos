@@ -1,7 +1,7 @@
 import numpy as np
 import cvxpy as cp
 from scipy.optimize import lsq_linear, minimize
-from .utils import myQuant
+from utils import myQuant
 
 def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
     """
@@ -21,10 +21,10 @@ def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
     num_controls = len(controls)
     
     # M draws from uniform
-    #m_vec = np.random.uniform(q_min, q_max, M)
+    m_vec = np.random.uniform(q_min, q_max, M)
 
     #debuggging version
-    m_vec = np.linspace(q_min, q_max, M)
+    #m_vec = np.linspace(q_min, q_max, M)
     
     # Quantiles for controls
     # If controls are list, compute one by one (could be different size)
@@ -58,62 +58,3 @@ def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
     
     return w.value
 
-
-def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
-    """
-    The alternative mixture of distributions approach using L1 distance of CDFs.
-    
-    Parameters:
-    controls (list of np.ndarray): List of controls
-    target (np.ndarray): The target unit
-    grid_min, grid_max, grid_rand, M, simplex: Parameters from getGrid / args
-    
-    Returns:
-    dict: Results containing optimal weights, etc.
-    """
-    num_controls = len(controls)
-    
-    # Empirical CDF evaluations
-    # Using np.searchsorted to quickly evaluate ECDF on grid_rand
-    cdf_matrix = np.zeros((len(grid_rand), num_controls + 1))
-    
-    target_sorted = np.sort(target)
-    cdf_matrix[:, 0] = np.searchsorted(target_sorted, grid_rand, side='right') / len(target)
-    
-    for i, ctrl in enumerate(controls):
-        ctrl_sorted = np.sort(ctrl)
-        cdf_matrix[:, i+1] = np.searchsorted(ctrl_sorted, grid_rand, side='right') / len(ctrl)
-        
-    # CVXPY optimization
-    w = cp.Variable(num_controls)
-    
-    # Minimize L1 norm: || C * w - target_cdf ||_1
-    obj = cp.Minimize(cp.norm1(cdf_matrix[:, 1:] @ w - cdf_matrix[:, 0]))
-    
-    if simplex:
-        constraints = [w >= 0, cp.sum(w) == 1]
-    else:
-        constraints = [cp.sum(w) == 1]
-        
-    prob = cp.Problem(obj, constraints)
-    prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-6)
-    
-    weights_opt = w.value
-    if weights_opt is None:
-        # Fallback if solver fails
-        weights_opt = np.ones(num_controls) / num_controls
-        
-    distance_opt = prob.value * (1/M) * (grid_max - grid_min)
-    mean_val = cdf_matrix[:, 1:] @ weights_opt
-    
-    order_idx = np.argsort(grid_rand)
-    mean_order = mean_val[order_idx]
-    target_order = cdf_matrix[:, 0][order_idx]
-    
-    return {
-        "weights_opt": weights_opt,
-        "distance_opt": distance_opt,
-        "mean": mean_order,
-        "target_order": target_order,
-        "cdf": cdf_matrix
-    }
