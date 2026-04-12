@@ -21,11 +21,8 @@ def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
     num_controls = len(controls)
     
     # M draws from uniform
-    #m_vec = np.random.uniform(q_min, q_max, M)
+    m_vec = np.random.uniform(q_min, q_max, M)
 
-    #debuggging version
-    m_vec = np.linspace(q_min, q_max, M)
-    
     # Quantiles for controls
     # If controls are list, compute one by one (could be different size)
     controls_s = np.zeros((M, num_controls))
@@ -46,10 +43,10 @@ def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
     w = cp.Variable(num_controls)
     # Add a tiny Ridge penalty to explicitly stabilize flat minima
     # This forces a unique solution when control units are highly collinear
-    objective = cp.Minimize(cp.sum_squares(C @ w - d) + 1e-8 * cp.sum_squares(w))
+    objective = cp.Minimize(cp.sum_squares(C @ w - d))
     
     # R's pracma::lsqlincon implicitly bounds weights to <= 1 even outside simplex
-    constraints = [cp.sum(w) == 1, w <= 1]
+    constraints = [cp.sum(w) == 1]
     if simplex:
         constraints.append(w >= 0)
         
