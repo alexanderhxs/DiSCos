@@ -4,7 +4,7 @@ from joblib import Parallel, delayed
 import logging
 from .solvers import disco_weights_reg, disco_mixture
 from .models import PermutResult
-from .utils import myQuant
+from .utils import myQuant, getGrid
 
 def run_permutation_test(disco_instance, peridx=None):
     """
@@ -99,15 +99,30 @@ def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_peri
     perc_cdf = {}
     
     for t_idx, t in enumerate(periods):
-        if t <= T0:
-            if not mixture:
+        if not mixture:
+            if t <= T0:
                 w = disco_weights_reg(perc[t], pert[t], M=M, simplex=simplex)
                 lambda_tp.append(w)
-            else:
-                grid_t = results_by_period[t].target.grid
-                w, cdf = disco_mixture(perc[t], pert[t], grid_t, M=M, simplex=simplex)
-                lambda_tp.append(w)
-                perc_cdf[t] = cdf
+        else:
+            # We need the CDF matrix for all t to calculate distillation distances
+            G_grid = len(results_by_period[t].target.grid) - 1
+            grid_min, grid_max, grid_rand, grid_ord = getGrid(pert[t], perc[t], G_grid)
+            
+            num_controls = len(perc[t])
+            cdf_matrix = np.zeros((len(grid_rand), num_controls + 1))
+            
+            target_sorted = np.sort(pert[t])
+            cdf_matrix[:, 0] = np.searchsorted(target_sorted, grid_rand, side='right') / len(pert[t])
+            
+            for k, ctrl in enumerate(perc[t]):
+                ctrl_sorted = np.sort(ctrl)
+                cdf_matrix[:, k+1] = np.searchsorted(ctrl_sorted, grid_rand, side='right') / len(ctrl)
+                
+            perc_cdf[t] = cdf_matrix
+            
+            if t <= T0:
+                res = disco_mixture(perc[t], pert[t], grid_min, grid_max, grid_ord, M, simplex)
+                lambda_tp.append(res['weights_opt'])
                 
     # Average optimal lambda
     lambda_opt = np.mean(lambda_tp, axis=0)

@@ -84,7 +84,7 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
     # CVXPY optimization
     w = cp.Variable(num_controls)
     
-    # Minimize L1 norm: || C * w - target_cdf ||_1
+    # Minimize L2 norm: || C * w - target_cdf ||_1
     obj = cp.Minimize(cp.norm1(cdf_matrix[:, 1:] @ w - cdf_matrix[:, 0]))
     
     if simplex:
@@ -93,7 +93,7 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
         constraints = [cp.sum(w) == 1]
         
     prob = cp.Problem(obj, constraints)
-    prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-6)
+    prob.solve(solver=cp.SCS, max_iters=100000, eps=1e-6)
     
     weights_opt = w.value
     if weights_opt is None:

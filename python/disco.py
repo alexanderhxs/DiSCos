@@ -107,7 +107,7 @@ class DiSCo:
         grid_min, grid_max, grid_rand, grid_ord = getGrid(target_data, controls_data, self.G)
             
         if self.mixture:
-            res = disco_mixture(controls_data, target_data, grid_min, grid_max, grid_rand, self.M, self.simplex)
+            res = disco_mixture(controls_data, target_data, grid_min, grid_max, grid_ord, self.M, self.simplex)
             weights = res['weights_opt']
             
             mixture_res = MixtureMethodResult(
@@ -115,7 +115,7 @@ class DiSCo:
                 distance=res['distance_opt'],
                 mean=res['mean']
             )
-            disco_res = DiSCoMethodResult(weights=None)
+            disco_res = DiSCoMethodResult(weights=weights)
             cdf_t = res['target_order']
             controls_cdf = res['cdf'][:, 1:] # Python solvers returns target at 0, controls at 1:
         else:
