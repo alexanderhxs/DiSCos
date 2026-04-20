@@ -15,9 +15,22 @@ source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/DiSCo_CI.R")
 source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/DiSCo_weights_reg.R")
 source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/DiSCo_bc.R")
 source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/utils.R")
+source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/DiSCo_mixture.R")
+source("C:/Dokumente/Studium/1. Master Thesis/DiSCos/R/DiSCoTEA.R")
+
 
 load("C:/Dokumente/Studium/1. Master Thesis/DiSCos/data/dube.rda")
 
+head(dube)
+
+id_col.target <- 2
+t0 <- 2003
+
+df <- copy(dube)
+disco <- DiSCo(df, id_col.target, t0, M=1000, G = 100, num.cores = 5, permutation = TRUE, CI = TRUE, boots = 100, graph = TRUE, simplex=TRUE, seed=NULL, q_max=0.9, mixture=FALSE)
+discot = DiSCoTEA(disco, agg = 'cdfDiff')
+
+lot_fit_quantiles_gg(disco, show_controls = FALSE)
 
 get_discrete_data <- function(sample_size, num_controls, dist_control = 3, dist_target = 4) {
 
@@ -194,8 +207,8 @@ lot_fit_quantiles_gg <- function(fit_synth, show_controls = FALSE) {
 }
 
 sample_size = 1000
-num_controls = 4
-
+num_controls = 30
+set.seed(123)
 # --- Testaufruf ---
 df <- get_discrete_data(sample_size = sample_size, num_controls = num_controls)
 id_col.target <- 0
@@ -212,9 +225,10 @@ fit_synth = DiSCo(df, id_col.target=id_col.target,
                   q_min = 0,
                   q_max=1,
                   seed=1,
-                  simplex=TRUE)
+                  simplex=TRUE,
+                  mixture=TRUE)
 
-lot_fit_quantiles_gg(fit_synth, show_controls = FALSE)
+lot_fit_quantiles_gg(disco, show_controls = FALSE)
 
 df <- get_continuous_data(sample_size = sample_size, num_controls = num_controls)
 id_col.target <- 0
@@ -231,7 +245,8 @@ fit_synth = DiSCo(df, id_col.target=id_col.target,
                   q_min = 0,
                   q_max=1,
                   seed=1,
-                  simplex=TRUE)
+                  simplex=TRUE,
+                  mixture=TRUE)
 
 lot_fit_quantiles_gg(fit_synth, show_controls = FALSE)
 

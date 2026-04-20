@@ -31,12 +31,12 @@ DiSCo_mixture_solve <- function(c_len, CDF.matrix, grid.min, grid.max, grid.rand
   # the optimization problem
   problem <- CVXR::Problem(CVXR::Minimize(objective),constraints)
   # solving the optimization problem
-  results <- CVXR::solve(problem, solver = "SCS", max_iters=10000, eps_rel=1e-6, eps_abs=1e-6) # TODO check tolerance cause sum of weights has some error relative to 1
-
+  results <- CVXR::psolve(problem, solver = "SCS", max_iters=100000, eps_rel=1e-6, eps_abs=1e-6) # TODO check tolerance cause sum of weights has some error relative to 1
   # returning the optimal weights and the value function which provides the
   # squared Wasserstein distance between the target and the corresponding barycenter
-  theweights.opt <- results$getValue(theweights)
-  thedistance.opt <- results$value*1/M*(grid.max - grid.min)
+  #theweights.opt <- results$getValue(theweights)
+  theweights.opt <- CVXR::value(theweights)
+  thedistance.opt <- results*1/M*(grid.max - grid.min)
 
 
   themean <- CDF.matrix[,2:ncol(CDF.matrix)]%*%theweights.opt

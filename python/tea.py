@@ -76,11 +76,17 @@ def disco_tea(
     samples=[0.25, 0.5, 0.75]
 ) -> DiSCoTEAResult:
     df = disco.params.df
-    t_max = df[disco.params.df.columns[1]].max() if isinstance(df, pd.DataFrame) else max(disco.results_periods.keys())  # Time column
     t0 = disco.params.t0
     
-    # Create a robust mapper from normalized 't_col' back to actual 'time_col' labels
-    _raw_mapper = dict(zip(df['t_col'], df['time_col']))
+    # Einfaches Mapping: Finde die Spalte, die den Startzeitpunkt t0 enthält
+    _raw_mapper = {t: t for t in disco.results_periods.keys()}
+    if isinstance(df, pd.DataFrame):
+        for col in df.columns:
+            if col != 't_col' and t0 in df[col].values:
+                _raw_mapper = dict(zip(df['t_col'], df[col]))
+                break
+
+    t_max = max(_raw_mapper.values())
     t_mapper = {k: int(v) if isinstance(v, float) and v.is_integer() else v for k, v in _raw_mapper.items()}
     
     # periods is a sorted list of integer periods 1, 2, 3...

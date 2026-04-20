@@ -33,9 +33,9 @@ def get_contunious_data(sample_size, num_controls, target_offset=0, dist_control
             z = np.random.multivariate_normal(np.zeros(dim), base_corr_mat, size=n_comp)
             u = norm.cdf(z)  # Uniform zwischen 0 und 1
             # Sub-Komponenten gruppieren sich engmaschig um das Basis-Zentrum
-            means = unit_base + (-2.0 + 4.0 * u)
+            means = unit_base + (-8.0 + 16.0 * u)
         else:
-            means = unit_base + np.random.uniform(-2, 2, (n_comp, dim))
+            means = unit_base + np.random.uniform(-8.0, 8.0, (n_comp, dim))
         
         covs = np.zeros((n_comp, dim, dim))
         for i in range(n_comp):

@@ -73,14 +73,34 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
     # Empirical CDF evaluations
     # Using np.searchsorted to quickly evaluate ECDF on grid_rand
     cdf_matrix = np.zeros((len(grid_rand), num_controls + 1))
-    
-    target_sorted = np.sort(target)
-    cdf_matrix[:, 0] = np.searchsorted(target_sorted, grid_rand, side='right') / len(target)
-    
-    for i, ctrl in enumerate(controls):
-        ctrl_sorted = np.sort(ctrl)
-        cdf_matrix[:, i+1] = np.searchsorted(ctrl_sorted, grid_rand, side='right') / len(ctrl)
+    target = np.squeeze(target)
+
+    if target.ndim == 1:
+        target_sorted = np.sort(target)
+        cdf_matrix[:, 0] = np.searchsorted(target_sorted, grid_rand, side='right') / len(target)
+
+        for i, ctrl in enumerate(controls):
+            ctrl = np.squeeze(ctrl)
+            ctrl_sorted = np.sort(ctrl)
+            cdf_matrix[:, i+1] = np.searchsorted(ctrl_sorted, grid_rand, side='right') / len(ctrl)
         
+    else:
+        # Multivariate eCDF durch Broadcasting
+        # grid_rand hat Shape (G, dim) -> erweitern auf (G, 1, dim)
+        # target hat Shape (N, dim)    -> erweitern auf (1, N, dim)
+        # Dadurch entsteht durch <= eine Matrix der Form (G, N, dim)
+        
+        # Target auswerten
+        # 1. np.all(..., axis=2) prüft, ob BEIDE Bedingungen (Alter <= g UND Einkommen <= g) wahr sind.
+        # 2. np.mean(..., axis=1) berechnet den Anteil der True-Werte (das ist die eCDF!)
+        cdf_matrix[:, 0] = np.mean(np.all(target[None, :, :] <= grid_rand[:, None, :], axis=2), axis=1)
+
+        # Controls auswerten
+        for i, ctrl in enumerate(controls):
+            ctrl = np.atleast_2d(ctrl) # Zur Sicherheit, falls eine Unit nur 1 Beobachtung hat
+            cdf_matrix[:, i+1] = np.mean(np.all(ctrl[None, :, :] <= grid_rand[:, None, :], axis=2), axis=1)
+    
+    
     # CVXPY optimization
     w = cp.Variable(num_controls)
     

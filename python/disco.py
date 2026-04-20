@@ -99,28 +99,65 @@ class DiSCo:
             return None
 
         # Evaluating the quantile functions on the grid "evgrid"
-        controls_q = np.zeros((len(self.evgrid), len(controls_data)))
-        for jj, ctrl in enumerate(controls_data):
-            controls_q[:, jj] = myQuant(ctrl, self.evgrid)
+        try:
+            controls_q = np.zeros((len(self.evgrid), len(controls_data)))
+            for jj, ctrl in enumerate(controls_data):
+                controls_q[:, jj] = myQuant(ctrl, self.evgrid)
+        except Exception as e:
+            controls_q = None
 
         # Sample grid
         grid_min, grid_max, grid_rand, grid_ord = getGrid(target_data, controls_data, self.G)
+        
+        # Only compute weights for pre-treatment periods to save computation time
+        calc_weights = (t <= self.T0_idx)
             
         if self.mixture:
-            res = disco_mixture(controls_data, target_data, grid_min, grid_max, grid_ord, self.M, self.simplex)
-            weights = res['weights_opt']
+            if calc_weights:
+                res = disco_mixture(controls_data, target_data, grid_min, grid_max, grid_rand, self.M, self.simplex)
+                weights = res['weights_opt']
+                distance = res['distance_opt']
+                mean = res['mean']
+            else:
+                weights = None
+                distance = None
+                mean = None
             
             mixture_res = MixtureMethodResult(
                 weights=weights,
-                distance=res['distance_opt'],
-                mean=res['mean']
+                distance=distance,
+                mean=mean
             )
             disco_res = DiSCoMethodResult(weights=weights)
-            cdf_t = res['target_order']
-            controls_cdf = res['cdf'][:, 1:] # Python solvers returns target at 0, controls at 1:
+            
+            # Evaluate empirical CDFs on the sorted grid (grid_ord)
+            # This is required for post-treatment (and pre-treatment plotting) 
+            target_sq = np.squeeze(target_data)
+            num_controls = len(controls_data)
+            
+            if target_sq.ndim == 1:
+                target_sorted = np.sort(target_sq)
+                cdf_t = np.searchsorted(target_sorted, grid_ord, side='right') / len(target_sq)
+                
+                controls_cdf = np.zeros((len(grid_ord), num_controls))
+                for i, ctrl in enumerate(controls_data):
+                    ctrl_sq = np.squeeze(ctrl)
+                    ctrl_sorted = np.sort(ctrl_sq)
+                    controls_cdf[:, i] = np.searchsorted(ctrl_sorted, grid_ord, side='right') / len(ctrl_sq)
+            else:
+                cdf_t = np.mean(np.all(target_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+                controls_cdf = np.zeros((len(grid_ord), num_controls))
+                for i, ctrl in enumerate(controls_data):
+                    ctrl_sq = np.atleast_2d(ctrl)
+                    controls_cdf[:, i] = np.mean(np.all(ctrl_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+
         else:
-            weights = disco_weights_reg(controls_data, target_data, M=self.M, simplex=self.simplex, 
-                                        q_min=0, q_max=1)
+            if calc_weights:
+                weights = disco_weights_reg(controls_data, target_data, M=self.M, simplex=self.simplex, 
+                                            q_min=0, q_max=1)
+            else:
+                weights = None
+                
             mixture_res = None
             disco_res = DiSCoMethodResult(weights=weights)
             
