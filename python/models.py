@@ -19,16 +19,16 @@ class PermutResult:
 
 @dataclass
 class TargetData:
-    cdf: Optional[np.ndarray]
-    grid: np.ndarray
-    data: np.ndarray
-    quantiles: np.ndarray
+    cdf: Optional[np.ndarray] = None
+    grid: Optional[np.ndarray] = None
+    data: Optional[np.ndarray] = None
+    quantiles: Optional[np.ndarray] = None
 
 @dataclass
 class ControlsData:
-    cdf: Optional[np.ndarray]
-    data: List[np.ndarray]
-    quantiles: np.ndarray
+    cdf: Optional[np.ndarray] = None
+    data: Optional[List[np.ndarray]] = None
+    quantiles: Optional[np.ndarray] = None
 
 @dataclass
 class DiSCoMethodResult:

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from .solvers import disco_weights_reg, disco_mixture
+from .solvers import disco_weights_reg, disco_mixture, Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver
 from .inference import run_bootstrap_ci
 from .permutation import run_permutation_test
 from .utils import getGrid, myQuant
@@ -42,6 +42,15 @@ class DiSCo:
         self.q_max = q_max
         self.mixture = mixture
         self.simplex = simplex
+        
+        # Instantiate solver strategy
+        if self.mixture:
+            self.solver = MixtureSolver()
+        else:
+            if isinstance(self.y_col, (list, tuple)) or len(df[self.y_col].shape) > 1:
+                self.solver = SlicedWassersteinSolver(n_slices=100)
+            else:
+                self.solver = Quantile1DSolver()
         self.CI = CI
         self.cl = cl
         self.B = B
@@ -70,11 +79,24 @@ class DiSCo:
         self.controls_id = [uid for uid in all_ids if uid != self.id_col_target]
         
         # Determine quantile constraints if necessary
-        if self.q_min > 0 or self.q_max < 1:
+        is_multi = isinstance(self.y_col, (list, tuple))
+        y_cols = self.y_col if is_multi else [self.y_col]
+        
+        q_mins = self.q_min if isinstance(self.q_min, (list, tuple, np.ndarray)) else [self.q_min] * len(y_cols)
+        q_maxs = self.q_max if isinstance(self.q_max, (list, tuple, np.ndarray)) else [self.q_max] * len(y_cols)
+        
+        if any(q > 0 for q in q_mins) or any(q < 1 for q in q_maxs):
             # Drop data outside the quantile bounds per unit/time
             # Replicating R's data.table::frank(y_col, ties.method = "average") / .N
-            quantiles = self.df.groupby([self.id_col, 't_col'])[self.y_col].rank(method='average', pct=True)
-            self.df = self.df[(quantiles >= self.q_min) & (quantiles <= self.q_max)]
+            mask = np.ones(len(self.df), dtype=bool)
+            
+            for i, col in enumerate(y_cols):
+                q_min_val, q_max_val = q_mins[i], q_maxs[i]
+                if q_min_val > 0 or q_max_val < 1:
+                    quantiles = self.df.groupby([self.id_col, 't_col'])[col].rank(method='average', pct=True)
+                    mask &= (quantiles >= q_min_val) & (quantiles <= q_max_val)
+                    
+            self.df = self.df[mask].copy()
 
         self.evgrid = np.linspace(0, 1, self.G + 1)
         
@@ -109,62 +131,45 @@ class DiSCo:
         # Sample grid
         grid_min, grid_max, grid_rand, grid_ord = getGrid(target_data, controls_data, self.G)
         
-        # Only compute weights for pre-treatment periods to save computation time
-        calc_weights = (t <= self.T0_idx)
-            
-        if self.mixture:
-            if calc_weights:
-                res = disco_mixture(controls_data, target_data, grid_min, grid_max, grid_rand, self.M, self.simplex)
-                weights = res['weights_opt']
-                distance = res['distance_opt']
-                mean = res['mean']
-            else:
-                weights = None
-                distance = None
-                mean = None
-            
-            mixture_res = MixtureMethodResult(
-                weights=weights,
-                distance=distance,
-                mean=mean
-            )
-            disco_res = DiSCoMethodResult(weights=weights)
-            
-            # Evaluate empirical CDFs on the sorted grid (grid_ord)
-            # This is required for post-treatment (and pre-treatment plotting) 
-            target_sq = np.squeeze(target_data)
-            num_controls = len(controls_data)
-            
-            if target_sq.ndim == 1:
-                target_sorted = np.sort(target_sq)
-                cdf_t = np.searchsorted(target_sorted, grid_ord, side='right') / len(target_sq)
-                
-                controls_cdf = np.zeros((len(grid_ord), num_controls))
-                for i, ctrl in enumerate(controls_data):
-                    ctrl_sq = np.squeeze(ctrl)
-                    ctrl_sorted = np.sort(ctrl_sq)
-                    controls_cdf[:, i] = np.searchsorted(ctrl_sorted, grid_ord, side='right') / len(ctrl_sq)
-            else:
-                cdf_t = np.mean(np.all(target_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
-                controls_cdf = np.zeros((len(grid_ord), num_controls))
-                for i, ctrl in enumerate(controls_data):
-                    ctrl_sq = np.atleast_2d(ctrl)
-                    controls_cdf[:, i] = np.mean(np.all(ctrl_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+        # Precompute empirical CDFs for target and controls directly over the grid.
+        # This gives BaseSolvers universal access to CDF data.
+        target_sq = np.squeeze(target_data)
+        num_controls = len(controls_data)
+        
+        if target_sq.ndim == 1:
+            target_sorted = np.sort(target_sq)
+            cdf_t = np.searchsorted(target_sorted, grid_ord, side='right') / len(target_sq)
 
+            controls_cdf = np.zeros((len(grid_ord), num_controls))
+            for i, ctrl in enumerate(controls_data):
+                ctrl_sq = np.squeeze(ctrl)
+                ctrl_sorted = np.sort(ctrl_sq)
+                controls_cdf[:, i] = np.searchsorted(ctrl_sorted, grid_ord, side='right') / len(ctrl_sq)
         else:
-            if calc_weights:
-                weights = disco_weights_reg(controls_data, target_data, M=self.M, simplex=self.simplex, 
-                                            q_min=0, q_max=1)
-            else:
-                weights = None
-                
-            mixture_res = None
-            disco_res = DiSCoMethodResult(weights=weights)
-            
-            target_sorted = np.sort(target_data)
-            cdf_t = np.searchsorted(target_sorted, grid_ord, side='right') / len(target_data)
-            controls_cdf = None
+            cdf_t = np.mean(np.all(target_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+            controls_cdf = np.zeros((len(grid_ord), num_controls))
+            for i, ctrl in enumerate(controls_data):
+                ctrl_sq = np.atleast_2d(ctrl)
+                controls_cdf[:, i] = np.mean(np.all(ctrl_sq[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
 
+        # Only compute weights for pre-treatment periods
+        weights = None
+        if t <= self.T0_idx:
+            # Delegate entirely to the injected solver strategy
+            weights = self.solver.fit_weights(
+                target=target_data, 
+                controls=controls_data, 
+                grid_min=grid_min, 
+                grid_max=grid_max, 
+                grid_rand=grid_rand, 
+                M=self.M, 
+                simplex=self.simplex,
+                q_min=0, q_max=1
+            )
+            
+        disco_res = DiSCoMethodResult(weights=weights)
+        # Mixture is kept temporarily for plotting logic but no longer acts as explicit branches here
+        mixture_res = MixtureMethodResult(weights=weights) if self.mixture else None
         target_q = myQuant(target_data, self.evgrid)
 
         target_obj = TargetData(
@@ -208,10 +213,7 @@ class DiSCo:
         pre_treat_weights = []
         for t in self.periods:
             if t <= self.T0_idx and t in self.results_by_period:
-                if self.mixture:
-                    w = self.results_by_period[t].mixture.weights
-                else:
-                    w = self.results_by_period[t].DiSCo.weights
+                w = self.results_by_period[t].DiSCo.weights
                 pre_treat_weights.append(w)
                 
         if not pre_treat_weights:
@@ -220,32 +222,24 @@ class DiSCo:
         self.weights_opt = np.mean(pre_treat_weights, axis=0)
 
         # calculating the counterfactual target quantiles and CDF
-        # R code: bc <- lapply(seq(1:T_max), function(x) DiSCo_bc(controls.q=results.periods[[x]]$controls$quantiles, Weights_DiSCo_avg, evgrid))
-        # R code for mixture: cdf <- lapply(seq(1:T_max), function(x) results.periods[[x]]$controls$cdf[,-1] %*% as.vector(Weights_mixture_avg) )
         for t in self.periods:
             if t in self.results_by_period:
                 p_res = self.results_by_period[t]
-                if self.mixture:
-                    cdf_x = p_res.controls.cdf @ self.weights_opt
-                    p_res.DiSCo.cdf = cdf_x
-                    
-                    # Compute quantile from CDF conceptually as inversion
-                    # bc_x <- sapply(evgrid, function(y) grid_ord[which(cdf_x >= (y-(1e-5)))[1]])
-                    grid_ord = p_res.target.grid
-                    bc_x = np.array([grid_ord[np.argmax(cdf_x >= (y - 1e-5))] for y in self.evgrid])
-                    p_res.DiSCo.quantile = bc_x
-                else:
-                    # DiSCo_bc is basically cross-sectional matrix multiplication with evgrid interpolation
-                    # In python: controls.q @ weights_opt
-                    bc_x = p_res.controls.quantiles @ self.weights_opt
-                    p_res.DiSCo.quantile = bc_x
-                    
-                    grid_ord = p_res.target.grid
-                    # Evaluate ECDF of bc_x on grid_ord
-                    bc_sorted = np.sort(bc_x)
-                    disco_cdf = np.searchsorted(bc_sorted, grid_ord, side='right') / len(bc_sorted)
-                    p_res.DiSCo.cdf = disco_cdf
-
+                
+                # Delegate evaluation to the injected solver
+                eval_res = self.solver.evaluate_counterfactual(
+                    target=p_res.target.data,
+                    controls=p_res.controls.data,
+                    weights=self.weights_opt,
+                    grid_ord=p_res.target.grid,
+                    evgrid=self.evgrid,
+                    controls_cdf=p_res.controls.cdf,
+                    controls_q=p_res.controls.quantiles,
+                    target_q=p_res.target.quantiles
+                )
+                
+                p_res.DiSCo.cdf = eval_res.get("disco_cdf", None)
+                p_res.DiSCo.quantile = eval_res.get("disco_quantile", None)
         ci_out = None
         if self.CI:
             ci_out = run_bootstrap_ci(self, replace=True)

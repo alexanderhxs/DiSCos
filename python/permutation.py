@@ -33,14 +33,15 @@ def run_permutation_test(disco_instance, peridx=None):
     
     for i, t in enumerate(disco_instance.periods):
         res_t = disco_instance.results_by_period[t]
-        if not disco_instance.mixture:
-            bc_t = res_t.DiSCo.quantile
-            true_q = res_t.target.quantiles
-            distt[i] = np.mean((bc_t - true_q)**2)
-        else:
-            cdf_t = res_t.DiSCo.cdf
-            true_cdf = res_t.target.cdf
-            distt[i] = np.mean((cdf_t - true_cdf)**2)
+        distt[i] = disco_instance.solver.compute_distance(
+            target=res_t.target.data,
+            controls=res_t.controls.data,
+            weights=disco_instance.weights_opt,
+            target_q=res_t.target.quantiles,
+            controls_q=res_t.controls.quantiles,
+            target_cdf=res_t.target.cdf,
+            controls_cdf=res_t.controls.cdf
+        )
             
     # Parallel permutation
     total_perms = len(peridx)
@@ -51,12 +52,12 @@ def run_permutation_test(disco_instance, peridx=None):
             idx, c_df, c_df_q, t_df, 
             disco_instance.T0_idx, peridx, disco_instance.evgrid,
             disco_instance.results_by_period,
-            disco_instance.M, disco_instance.simplex, disco_instance.mixture
+            disco_instance.M, disco_instance.simplex, disco_instance.solver
         ) for idx in peridx
     )
-    
+
     distp_matrix = np.array(distp)
-    
+
     # Calculate ranks and p-values
     p_val = _disco_per_rank(distt, distp_matrix, disco_instance.T0_idx)
     
@@ -70,7 +71,7 @@ def run_permutation_test(disco_instance, peridx=None):
         plot=None
     )
 
-def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_period, M, simplex, mixture):
+def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_period, M, simplex, solver):
     """
     Run one iteration of the permutation test.
     idx is the index from peridx of the new "target" unit.
@@ -99,7 +100,7 @@ def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_peri
     perc_cdf = {}
     
     for t_idx, t in enumerate(periods):
-        if not mixture:
+        if type(solver).__name__ != 'MixtureSolver':
             if t <= T0:
                 w = disco_weights_reg(perc[t], pert[t], M=M, simplex=simplex)
                 lambda_tp.append(w)
@@ -131,7 +132,7 @@ def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_peri
     
     # Eval dist
     for i, t in enumerate(periods):
-        if not mixture:
+        if type(solver).__name__ != 'MixtureSolver':
             bc_t = perc_q[t] @ lambda_opt
             target_q = myQuant(pert[t], evgrid)
             dist[i] = np.mean((bc_t - target_q)**2)

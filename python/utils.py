@@ -12,6 +12,7 @@ def myQuant(X, q):
     np.ndarray: Evaluated quantiles
     """
     # Equivalent to R's quantile type 7
+    #TODO: Bei 2D X, shape (N,d) soll (N,d) zurückkommen, wobei die Quantiele pro Spalte berechnet werden
     return np.quantile(X, q, axis=0, method='linear')
 
 def getGrid(target, controls, G):

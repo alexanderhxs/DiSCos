@@ -10,7 +10,7 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
     # Check if target data is multidimensional
     is_multi = len(period_res.target.data.shape) > 1 and period_res.target.data.shape[1] > 1
     
-    if getattr(period_res, 'mixture', False) and is_multi:
+    if is_multi:
         dim = period_res.target.data.shape[1]
         weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
         
@@ -122,7 +122,7 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
     period_res = fit_synth.results_periods[period]
     is_multi = len(period_res.target.data.shape) > 1 and period_res.target.data.shape[1] > 1
     
-    if getattr(period_res, 'mixture', False) and is_multi:
+    if is_multi:
         dim = period_res.target.data.shape[1]
         weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
         
@@ -213,8 +213,8 @@ def plot_fit_copula(fit_synth, period=None):
     target_data = period_res.target.data
     is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
     
-    if not is_multi or not getattr(period_res, 'mixture', False):
-        print("Joint Plot wird nur für 2D Daten im mixture Modus unterstützt.")
+    if not is_multi:
+        print("Joint Plot wird nur für 2D Daten unterstützt.")
         return
         
     weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
@@ -295,8 +295,8 @@ def plot_fit_joint_contour(fit_synth, period=None):
     target_data = period_res.target.data
     is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
     
-    if not is_multi or not getattr(period_res, 'mixture', False):
-        print("Joint Contour Plot wird nur für 2D Daten im mixture Modus unterstützt.")
+    if not is_multi:
+        print("Joint Contour Plot wird nur für 2D Daten unterstützt.")
         return
         
     weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights

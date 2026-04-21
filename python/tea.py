@@ -1,8 +1,55 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from abc import ABC, abstractmethod
 from typing import List, Optional, Union
 from .models import DiSCoResult, DiSCoTEAResult
+
+class BaseTEA(ABC):
+    def __init__(self, disco: DiSCoResult, agg: str, graph: bool, t_plot: Optional[List[int]], xlim, ylim, samples):
+        self.disco = disco
+        self.agg = agg
+        self.graph = graph
+        self.t_plot = t_plot
+        self.xlim = xlim
+        self.ylim = ylim
+        self.samples = samples
+        
+        self.df = disco.params.df
+        self.t0 = disco.params.t0
+
+        # Create time mapper
+        self.periods = sorted(list(self.disco.results_periods.keys()))
+        self._raw_mapper = {t: t for t in self.periods}
+        if isinstance(self.df, pd.DataFrame):
+            for col in self.df.columns:
+                if col != 't_col' and self.t0 in self.df[col].values:
+                    self._raw_mapper = dict(zip(self.df['t_col'], self.df[col]))
+                    break
+        self.t_mapper = {k: int(v) if isinstance(v, float) and v.is_integer() else v for k, v in self._raw_mapper.items()}
+        self.t_start = min(self.periods)
+        self.t_max = max(self._raw_mapper.values())
+        if self.t_plot is None:
+            self.t_plot = [self.t_mapper[p] for p in self.periods]
+
+        self.CI = disco.params.CI
+        self.q_min = disco.params.q_min
+        self.q_max = disco.params.q_max
+
+    @abstractmethod
+    def evaluate(self) -> DiSCoTEAResult:
+        pass
+
+class ClassicTEA(BaseTEA):
+    def evaluate(self) -> DiSCoTEAResult:
+        treats = {}
+        treats_boot = {}
+        target_vals = {}
+        sds = {}
+        ci_lower = {}
+        ci_upper = {}
+
+        grid = self.disco.evgrid
 
 def plot_dist_over_time(
     cdf_centered: dict, 
@@ -66,18 +113,26 @@ def plot_dist_over_time(
     
     return fig
 
+class MultivariateTEA(BaseTEA):
+    def evaluate(self) -> DiSCoTEAResult:
+        raise NotImplementedError("Multivariate Treatment Effects (e.g. Sliced Wasserstein Distance over time) not yet implemented.")
+
 def disco_tea(
-    disco: DiSCoResult, 
-    agg: str = "quantileDiff", 
-    graph: bool = True, 
-    t_plot: Optional[List[int]] = None, 
-    xlim=None, 
-    ylim=None, 
+    disco: DiSCoResult,
+    agg: str = "quantileDiff",
+    graph: bool = True,
+    t_plot: Optional[List[int]] = None,
+    xlim=None,
+    ylim=None,
     samples=[0.25, 0.5, 0.75]
 ) -> DiSCoTEAResult:
+    if agg in ["wasserstein_dist", "sinkhorn_div"]:
+        strategy = MultivariateTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        return strategy.evaluate()
+
+    
     df = disco.params.df
     t0 = disco.params.t0
-    
     # Einfaches Mapping: Finde die Spalte, die den Startzeitpunkt t0 enthält
     _raw_mapper = {t: t for t in disco.results_periods.keys()}
     if isinstance(df, pd.DataFrame):

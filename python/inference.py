@@ -4,100 +4,95 @@ from .solvers import disco_weights_reg, disco_mixture
 from .utils import getGrid, myQuant
 from .models import CIResult, CIBand, CIWeights, CIBootmat
 
-def disco_ci_iter(t, controls_t, target_t, grid_t, T0, M=1000,
-                  evgrid=np.linspace(0, 1, 1001), mixture=False, simplex=False, replace=True):
+def disco_ci_iter(t, controls_t, target_t, grid_t, T0, solver, M=1000,
+                  evgrid=np.linspace(0, 1, 1001), simplex=False, replace=True):
     """
     Performs a single bootstrap redraw for a single time period `t`.
-    
-    Resamples the target and control distributions with replacement, recomputes 
-    empirical CDFs and quantiles on the evaluation grid, and if in a pre-treatment 
-    period (t <= T0), solves for the optimal weights.
     """
     # --- RESAMPLE TARGET STATS ---
     t_len = len(target_t)
-    mytar = target_t[np.random.choice(t_len, size=t_len, replace=replace)]
-    
+    mytar = target_t[np.random.choice(t_len, size=t_len, replace=replace)]      
+
     # Recompute empirical quantiles and CDFs based on the resampled target array
     mytar_q = myQuant(mytar, evgrid)
     mytar_sorted = np.sort(mytar)
-    mytar_cdf = np.searchsorted(mytar_sorted, grid_t, side='right') / t_len
-    
+    mytar_cdf = np.searchsorted(mytar_sorted, grid_t, side='right') / t_len     
+
     # --- RESAMPLE CONTROLS STATS ---
     mycon_list = []
     mycon_q = np.zeros((len(evgrid), len(controls_t)))
     mycon_cdf = np.zeros((len(grid_t), len(controls_t)))
-    
+
     for ii, controls_t_i in enumerate(controls_t):
         c_len = len(controls_t_i)
-        
+
         # Resample each control unit drawing `c_len` observations with replacement
         mycon = controls_t_i[np.random.choice(c_len, size=c_len, replace=replace)]
         mycon_list.append(mycon)
-        
+
         # Compute counterfactual column slice for this control unit in the resampled period
         mycon_q[:, ii] = myQuant(mycon, evgrid)
-        
+
         # Build strict CDF vectors by counting how many elements fall below each grid point
         mycon_sorted = np.sort(mycon)
         mycon_cdf[:, ii] = np.searchsorted(mycon_sorted, grid_t, side='right') / c_len
-        
+
     # --- SOLVE FOR WEIGHTS ---
-    # We only recalculate weights for pre-treatment periods (t <= T0)
     if t <= T0:
-        if not mixture:
-            lambda_weights = disco_weights_reg(mycon_list, mytar, M=M, simplex=simplex)
-        else:
-            grid_min, grid_max, grid_rand, grid_ord = getGrid(mytar, mycon_list, len(grid_t))
-            mixt = disco_mixture(mycon_list, mytar, grid_min, grid_max, grid_ord, M, simplex)
-            lambda_weights = mixt['weights_opt']
+        G_grid = len(grid_t) - 1
+        grid_min, grid_max, grid_rand, grid_ord = getGrid(mytar, mycon_list, G_grid)
+
+        lambda_weights = solver.fit_weights(
+            target=mytar, controls=mycon_list, M=M, simplex=simplex,
+            q_min=0, q_max=1, grid_min=grid_min, grid_max=grid_max, grid_rand=grid_rand, grid_ord=grid_ord
+        )
     else:
         lambda_weights = None
-        
+
     return {
         "weights": lambda_weights,
-        "target": {"quantile": mytar_q, "cdf": mytar_cdf},
-        "controls": {"quantile": mycon_q, "cdf": mycon_cdf}
+        "target": {"data": mytar, "quantile": mytar_q, "cdf": mytar_cdf, "grid_t": grid_t},
+        "controls": {"data": mycon_list, "quantile": mycon_q, "cdf": mycon_cdf}
     }
 
-def boot_counterfactuals(result_t, t, mixture, weights, evgrid, grid_t):
+def boot_counterfactuals(result_t, t, solver, weights, evgrid):        
     """
-    Computes bootstrapped counterfactual distributions for period `t` given 
+    Computes bootstrapped counterfactual distributions for period `t` given     
     the averaged weights from the pre-treatment bootstrapped periods.
-    
-    Differences between the target and synthetic (counterfactual) distributions 
-    are calculated for both quantiles and CDFs.
     """
     controls_cdf = result_t["controls"]["cdf"]
     controls_q = result_t["controls"]["quantile"]
     target_q = result_t["target"]["quantile"]
     target_cdf = result_t["target"]["cdf"]
+    grid_t = result_t["target"]["grid_t"]
+    target_data = result_t["target"]["data"]
+    controls_data = result_t["controls"]["data"]
+
+    eval_res = solver.evaluate_counterfactual(
+        target=target_data,
+        controls=controls_data,
+        weights=weights,
+        grid_ord=grid_t,
+        evgrid=evgrid,
+        controls_cdf=controls_cdf,
+        controls_q=controls_q,
+        target_q=target_q
+    )
     
-    if mixture:
-        # MIXTURE APPROACH: Interpolate the synthetic CDF 
-        # Calculate cross-sectional synthetic CDF as the dot product between the controls' CDF 
-        # matrix and the averaged weights across the entire evaluation grid.
-        cdf_t = controls_cdf @ weights
-        
-        # Estimate the synthetic quantile function by inverting the synthetic CDF. 
-        # For each quantile bin in 'evgrid', we locate the first grid index where 
-        # the synthetic CDF accumulates mass >= y.
-        q_t = np.array([grid_t[np.argmax(cdf_t >= (y - 1e-5))] for y in evgrid])
-    else:
-        # BARYCENTER/QUANTILE APPROACH: Interpolate the synthetic Quantile function
-        # Compute the counterfactual quantiles as the dot product of the 
-        # control quantiles matrix and the averaged weights 
-        q_t = controls_q @ weights
-        
-        # Estimate the synthetic CDF from the synthetic quantile outputs
-        # by searching where the evaluated grid points fall inside the sorted counterfactual quantiles.
-        q_t_sorted = np.sort(q_t)
-        cdf_t = np.searchsorted(q_t_sorted, grid_t, side='right') / len(q_t)
-        
-    # --- DISTRIBUTIONAL DIFFERENCES ---
+    cdf_t = eval_res["disco_cdf"]
+    q_t = eval_res["disco_quantile"]
+
     # Difference = Actual Distribution - Synthetic Distribution (Counterfactual)
-    cdf_diff = target_cdf - cdf_t
-    q_diff = target_q - q_t
-    
+    if target_cdf is not None and cdf_t is not None:
+        cdf_diff = target_cdf - cdf_t
+    else:
+        cdf_diff = None
+
+    if target_q is not None and q_t is not None:
+        q_diff = target_q - q_t
+    else:
+        q_diff = None
+
     return {
         "cdf": cdf_t,
         "quantile": q_t,
@@ -106,11 +101,11 @@ def boot_counterfactuals(result_t, t, mixture, weights, evgrid, grid_t):
     }
 
 def disco_ci(redraw, controls, target, T_max, T0, grids, evgrid,
-             mixture=False, simplex=False, M=1000, replace=True, seed=None):
+             solver, simplex=False, M=1000, replace=True, seed=None):    
     """
     Executes a single complete bootstrap draw across all time periods (T=1 to T_max).
-    
-    Averages pre-treatment weights (t <= T0) and generates counterfactuals for all periods using 
+
+    Averages pre-treatment weights (t <= T0) and generates counterfactuals for all periods using
     the averaged weights. `redraw` tracks the current bootstrap iteration and is optionally used for deterministic seeding.
     """
     if seed:
@@ -119,18 +114,18 @@ def disco_ci(redraw, controls, target, T_max, T0, grids, evgrid,
     boots_periods = []
     for t in range(T_max):
         result_t = disco_ci_iter(
-            t + 1, controls[t], target[t], grids[t], T0,
-            M=M, evgrid=evgrid, mixture=mixture, simplex=simplex, replace=replace
+            t + 1, controls[t], target[t], grids[t], T0, solver=solver,
+            M=M, evgrid=evgrid, simplex=simplex, replace=replace
         )
         boots_periods.append(result_t)
-        
+
     # extract and average weights (only from t <= T0)
     pre_weights = [bp["weights"] for bp in boots_periods[:int(T0)] if bp["weights"] is not None]
-    weights = sum(pre_weights) / T0
-    
+    weights = sum(pre_weights) / T0 if len(pre_weights) > 0 else np.zeros(len(controls[0]))
+
     disco_boot = []
     for t in range(T_max):
-        cf = boot_counterfactuals(boots_periods[t], t + 1, mixture, weights, evgrid, grids[t])
+        cf = boot_counterfactuals(boots_periods[t], t + 1, solver, weights, evgrid)
         disco_boot.append(cf)
         
     return {
@@ -275,17 +270,22 @@ def run_bootstrap_ci(model, uniform=True, replace=True):
         target.append(res.target.data)
         grids.append(res.target.grid)
         
-        q_disco.append(res.DiSCo.quantile)
-        cdf_disco.append(res.DiSCo.cdf)
-        q_obs.append(res.target.quantiles)
-        cdf_obs.append(res.target.cdf)
-        
+        # Fallback vectors with NaNs handling multidimensional missing 1D stats 
+        q_d = res.DiSCo.quantile if res.DiSCo.quantile is not None else np.full_like(model.evgrid, np.nan)
+        cdf_d = res.DiSCo.cdf if res.DiSCo.cdf is not None else np.full_like(model.evgrid, np.nan)
+        q_o = res.target.quantiles if res.target.quantiles is not None else np.full_like(model.evgrid, np.nan)
+        cdf_o = res.target.cdf if res.target.cdf is not None else np.full_like(model.evgrid, np.nan)
+
+        q_disco.append(q_d)
+        cdf_disco.append(cdf_d)
+        q_obs.append(q_o)
+        cdf_obs.append(cdf_o)
+
     CI_bootmat = Parallel(n_jobs=model.num_cores)(
         delayed(disco_ci)(
             b, controls, target, T_max, T0, grids, model.evgrid,
-            mixture=model.mixture, simplex=model.simplex, M=model.M, replace=replace, seed=seed
-        )
-        for b in range(B)
+            solver=model.solver, simplex=model.simplex, M=model.M, replace=replace, seed=seed
+        ) for b in range(B)
     )
-    
+
     return parse_boots(CI_bootmat, cl, q_disco, cdf_disco, q_obs, cdf_obs, uniform)

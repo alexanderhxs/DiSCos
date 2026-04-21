@@ -1,11 +1,12 @@
 import torch
 import pandas as pd
+import numpy as np
 
-def project_and_sort_distribution(df: pd.DataFrame, 
-                                  features: list, 
-                                  n_slices: int = 100, 
-                                  directions: torch.Tensor = None, 
-                                  sort_output: bool = True):
+def radon_transform(target: np.array, 
+                    controls: list, 
+                    n_slices: int = 100, 
+                    directions: torch.Tensor = None, 
+                    sort_output: bool = True):
     """
     Projiziert hochdimensionale Daten auf zufällige 1D-Slices und sortiert diese.
     Dies ist der Kernschritt zur Berechnung der Sliced Wasserstein Distance.
@@ -21,7 +22,7 @@ def project_and_sort_distribution(df: pd.DataFrame,
         dict: Enthält 'projected_data' (N, L) und 'directions' (d, L).
     """
     # 1. Daten extrahieren und in PyTorch Tensor konvertieren
-    data_np = df[features].to_numpy()
+    data_np = np.concatenate([target] + controls, axis=0)  # Shape: (N, d)
     X = torch.tensor(data_np, dtype=torch.float32)  # Shape: (N, d)
     
     N, d = X.shape
