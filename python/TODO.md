@@ -1,43 +1,43 @@
 # Projekt-Tracker: DiSCo Python (Master Thesis)
 
 ## 📌 Executive Summary & Status
-**Aktueller Fokus:** Ausweitung der DiSCo-Methodik auf multivariate Verteilungen unter Verwendung von Mixture-Modellen (L1) und Sliced Wasserstein (S-Wasserstein). Die Kern-Architektur (Solver, Preprocessing, Visualisierungen) ist auf multivariaten Support ausgelegt, aktuelle Baustelle ist die Rückprojektion der Sliced Quantile, sowie Inferenz-/Testmethoden im multivariaten Raum.
+**Aktueller Fokus:** Ausweitung der DiSCo-Methodik auf multivariate Verteilungen (Mixture-Modelle & Sliced Wasserstein). Die Code-Architektur ist grundlegend multivariat-fähig. Fokus liegt nun auf fundierter methodischer Auswertung (Inferenz, Tests, evaluative Visualisierung) sowie einer sauberen, wartbaren Code-Basis.
 
 ---
 
-## 🚧 Current Sprint (In Progress)
-- [ ] **Umgang bei Verschiedenen sample größen**: Aktell kann die radon_transform und der SlicedWassersteinSolver noch nicht unterschiedliche sample größen bei den controls handeln. Das stellt besonders ein Problem bei quantils filterungen dar. 
+## 🧠 Methodik & Konzeption (Für den Professor / Methodische Diskussionen)
+*Theoretische, statistische und konzeptionelle Punkte für Besprechungen.*
 
-- [ ] **S-Wasserstein "evaluate_counterfactual" implementieren**: Aus den errechneten DiSCo-Weights müssen im S-Wasserstein-Solver die korrekten multivariaten Quantile / CDFs rekonstruiert werden. *(Aktuell offenes TODO in `solvers.py`)*.
+### 🚧 Actively Researching / Developing:
+- [ ] **Evaluierungsplot 2D-Verteilungen**: Einen klassischen 2D-Scatterplot entwickeln (vorne anstellen!), um Target und DSC für bivariate Verteilungen visuell direkt und interpretierbar gegenüberzustellen.
+- [ ] **Vergleich 2D vs. Bedingte 1D-Verteilung**: Konzeptionell eine Methode entwickeln, um die gemeinsame 2D-Verteilung gegen eine bedingte 1D-Verteilung (mit der einen Variablen als stetigen Einflussfaktor) vergleichen zu können.
+- [ ] **Fit-Metriken entwickeln**: Quantitative Metriken zur strikten Evaluation des Distribution-Fits (z.B. Out-of-Sample Losses, Abstandsmaße) im multivariaten Raum konzipieren.
+- [ ] **Auswertungsframework (TEA)**: Logik zur Berechnung der *Treatment Effects on the Treated Distributions* (TEA) auf mehrdimensionale Ergebnisse anpassen.
 
-- [ ] **Auswertungsframework (TEA)**: Logik zur Berechnung der *Treatment Effects on the Treated Distributions* (TEA) definieren und für mehrdimensionale Ergebnisse anpassen.
-
-- [ ] **Fit-Metriken entwickeln**: Quantitative Metriken zur Evaluation des Distribution-Fits (z.B. Out-of-Sample Losses) implementieren.
-
----
-
-## 🗣️ Open Discussion Points (Für Meetings)
-- **Konfidenzintervalle mehrdimensional**: Wie genau definieren und berichten wir CIs für multivariate Daten? (Uniform vs. Point-wise Quantiles über gemeinsame Dichten?).
-- **Permutationstests**: Aufbau der Permutation-Inference im multivariaten Fall abstimmen - auf Basis der marginalen Verteilungen oder zwingend Joint-Distribution-Teststatistiken?
-- **Optimierung mit LHS**: Bietet Latin Hypercube Sampling (LHS) beim Sampling der Gitterpunkte (`getGrid` / `disco_weights_reg`) tatsächlich die erhoffte Performance/Konvergenz-Steigerung?
+### 🗣️ Open Discussion Points (Methodik):
+- **Konfidenzintervalle mehrdimensional**: Wie genau definieren und berechnen wir CIs für multivariate Daten sinnvoll? (Uniforme Range vs. Point-wise Quantiles über gemeinsame Dichten?).
+- **Permutationstests / Inference**: Ablauf der Permutations-Inferenz für Nd-Fälle: Soll der Fokus auf den marginalen Verteilungen liegen oder setzen wir zwingend Joint-Distribution-Teststatistiken ein?
+- **Optimierung mit LHS**: Bietet Latin Hypercube Sampling beim Sampling der Gitterpunkte (`getGrid` / S-Wasserstein Slices) eine signifikante Performance- oder Konvergenz-Steigerung?
 
 ---
 
-## 📋 Backlog: Data Science & Methodology
-- [ ] **LHS Implementierung evaluieren**: Optimalen Einbau von LHS beim Datenpunkt-Sampling testen.
-- [ ] **Multivariate Inference-Pipeline**: `disco_ci` und Parsing-Logiken (`parse_boots`) in `inference.py` vollständig für Nd-Arrays kompatibel gestalten (momentan Broadcasting-Risiken).
-- [ ] **Multivariate Permutationstests**: Das klassische Permutationsverfahren auf die Joint-Distribution Abstände ausweiten.
+## 💻 Implementierung & Softwaretechnik (Für Entwicklung / Code-Qualität)
+*Konkrete To-Dos für den Codebau, Algorithmen und die Systemarchitektur.*
 
----
+### 🚧 Current Sprint & Blocker:
+- [ ] **Softwaretechnische Implementierung verbessern**: Das gesamte Paket konzeptionell und architektonisch aufräumen. Ziel: Eine konsistente, einheitliche objektorientierte Struktur (OOP) über alle abstrakten Solver und Utilities hinweg. Code-Smells minimieren!
+- [ ] **Umgang bei verschiedenen Sample-Größen**: Im S-Wasserstein und der Radon-Transformation die Restriktionen bei unbalancierten Control-Gruppen endgültig auflösen (insbesondere problematisch nach asymmetrischen Quantils-Filterungen).
+- [ ] **S-Wasserstein "evaluate_counterfactual" implementieren**: Aus den errechneten DiSCo-Weights müssen im S-Wasserstein-Solver noch die korrekten multivariaten Quantile / CDFs algorithmisch rekonstruiert werden *(Offen in `solvers.py`)*.
 
-## 💻 Backlog: Software Engineering & Refactoring
-- [ ] **Tests schreiben**: Unit-Tests für `swasserstein.py` und die modifizierten `solvers.py` Methoden hinzufügen, um Dimensions-Bugs dauerhaft abzusichern.
-- [ ] **Performance Profiling**: Die Radar-Rückprojektionen und Copula-Schätzungen auf große Datensätze Stresstesten und Laufzeiten analysieren.
+### 📋 Backlog & Testing:
+- [ ] **Multivariate Inference-Pipeline refactoren**: `disco_ci` und Parsing-Logiken (`parse_boots`) in `inference.py` vollständig und robust für Nd-Arrays und deren Broadcasting-Verhalten gestalten.
+- [ ] **Tests schreiben**: Unit-Tests für `swasserstein.py` und modifizierte `solvers.py` Methoden hinzufügen, um Dimensions-Bugs dauerhaft abzusichern.
+- [ ] **Performance Profiling**: Radar-Rückprojektionen und Copula-Schätzungen auf große Datensätze anwenden und Laufzeiten / Memory überprüfen.
 
 ---
 
 ## ✅ Recently Done (Changelog)
+- [x] **Agnostische Visualisierungen**: Plots (`plot_fit_quantiles`, `plot_fit_cdf`, etc.) dynamisieren sich jetzt solver-unabhängig für jede beliebige Datendimension.
 - [x] **S-Wasserstein Dimensions-Bugs**: `radon_transform` trennt nun Target- und Control-Samples fehlerfrei, auch bei unbalancierten Sample-Sizes (gefixt in `fit_weights`).
-- [x] **Agnostische Visualisierungen**: Plots (`plot_fit_quantiles`, `plot_fit_cdf`, `plot_fit_joint_contour`, `plot_fit_copula`) dynamisieren sich jetzt solver-unabhängig für jede beliebige Datendimension.
 - [x] **Multivariates Preprocessing**: Filterlogik für Quantile (`q_min`, `q_max`) ist jetzt vollständig broadcast-fähig für multidimensionale Zielarrays.
 - [x] **OOP Signatur-Harmonisierung**: Verdeckten Parameter-Bug (`grid_ord` als Keyword-Arg) in den Unterklassen von `BaseSolver` beseitigt, was das Bootstrapping blockierte.

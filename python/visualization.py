@@ -375,3 +375,82 @@ def plot_fit_joint_contour(fit_synth, period=None):
     
     plt.tight_layout()
     plt.show()
+
+
+def plot_fit_scatter2d(fit_synth, period=None):
+    """
+    Erstellt einen klassischen 2D Scatterplot der Originaldaten.
+    Target-Datenpunkte werden schwarz gezeichnet.
+    Die Punkte der DSC (gemischte Controls) werden rot gezeichnet und
+    ihre Deckkraft/Größe kann durch das jeweilige Gewicht bestimmt werden.
+    (Geht von 2 Dimensionen aus).
+    """
+    import matplotlib.lines as mlines
+    
+    periods = sorted(list(fit_synth.results_periods.keys()))
+    if period is None:
+        period = periods[-1]
+        
+    period_res = fit_synth.results_periods[period]
+    target_data = period_res.target.data
+    is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
+    
+    if not is_multi:
+        print("2D Scatterplot wird nur für 2D Daten unterstützt.")
+        return
+        
+    weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
+    controls_data = [c for w, c in zip(weights, period_res.controls.data) if w > 1e-5 and len(c) > 0]
+    filtered_weights = [w for w in weights if w > 1e-5]
+    
+    if len(controls_data) == 0:
+        return
+        
+    # Target Data
+    x_t = target_data[:, 0]
+    y_t = target_data[:, 1]
+    
+    # DSC Mixture Pooling
+    pool_x = []
+    pool_y = []
+    pool_w = []
+    
+    for c_data, w in zip(controls_data, filtered_weights):
+        pool_x.extend(c_data[:, 0])
+        pool_y.extend(c_data[:, 1])
+        # Das Gewicht des einzelnen Datenpunktes ist das Gewicht der Control-Unit 
+        # aufgeteilt auf die Anzahl ihrer Beobachtungen
+        pool_w.extend([w / len(c_data)] * len(c_data))
+            
+    pool_x = np.array(pool_x)
+    pool_y = np.array(pool_y)
+    pool_w = np.array(pool_w)
+    
+    # Um zu verhindern, dass Punkte der DSC mit extrem kleinen Gewichten den Plot überlagern,
+    # normieren wir die Gewichte für die Visualisierung leicht und sampeln Punkte oder
+    # zeichnen sie mit Transparenz (alpha proportional zum Gewicht).
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Variante 1: Samplen der DSC-Punkte nach Gewichtung, passend zur Target-Länge
+    N = len(target_data)
+    pool_w_norm = pool_w / np.sum(pool_w)
+    sample_idx = np.random.choice(len(pool_x), size=N, p=pool_w_norm)
+    
+    # Scatter Plots
+    ax.scatter(pool_x[sample_idx], pool_y[sample_idx], alpha=0.6, s=30, color='red', label='DSC (Sampled)')
+    ax.scatter(x_t, y_t, alpha=0.7, s=30, color='black', label='Target')
+    
+    ax.set_title('2D Scatterplot (Bivariate Distribution)', fontsize=14)
+    ax.set_xlabel('Dim 1', fontsize=12)
+    ax.set_ylabel('Dim 2', fontsize=12)
+    
+    ax.legend(loc='best', frameon=True, edgecolor='black', fontsize=12)
+    ax.grid(linestyle='--', alpha=0.3)
+    ax.spines['top'].set_visible(True)
+    ax.spines['right'].set_visible(True)
+    ax.spines['bottom'].set_visible(True)
+    ax.spines['left'].set_visible(True)
+    
+    plt.tight_layout()
+    plt.show()

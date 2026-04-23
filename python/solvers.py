@@ -87,7 +87,7 @@ class MixtureSolver(BaseSolver):
 
 
 class SlicedWassersteinSolver(Quantile1DSolver):
-    def __init__(self, n_slices=100):
+    def __init__(self, n_slices=10000):
         super().__init__()
         self.n_slices = n_slices
 
@@ -126,10 +126,6 @@ class SlicedWassersteinSolver(Quantile1DSolver):
         # 1. Radon-Transformation verwenden (ohne gemeinsames Sortieren, da Ziel/Controls separat bleiben muessen)
         radon_result = radon_transform(target, controls, n_slices=self.n_slices, sort_output=False)
         projected_data = radon_result['projected_data']
-        
-        # Konvertiere ggf. von PyTorch Tensor zu Numpy Array
-        if hasattr(projected_data, 'numpy'):
-            projected_data = projected_data.detach().numpy()
 
         M = kwargs.get("M", 500)
         q_min = kwargs.get("q_min", 0)
