@@ -97,7 +97,7 @@ class SlicedWassersteinSolver(Quantile1DSolver):
         simplex = kwargs.get("simplex", True)
         # 1. Radon-Transformation: Projizieren auf zufällige 1D-Slices
         radon_result = radon_transform(target, controls, n_slices=self.n_slices, sort_output=False)
-        projected_data = radon_result['projected_data'].numpy().reshape(num_controls+1, N, self.n_slices) 
+        projected_data = radon_result['projected_data'].reshape(num_controls+1, N, self.n_slices) 
 
         # 2. Quantile Regression auf den projizierten Daten
         weights = disco_weights_reg(projected_data[1:, :,:], projected_data[0, :, :], M=M, simplex=simplex)

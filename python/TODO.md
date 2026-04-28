@@ -5,11 +5,16 @@
 
 ---
 
+## Daten
+- Arbeitstunden gegen Stundenlohn -> Mindestlohn als treatment
+- Suchen nach eventuell interessantem Textdatensatz für sentiment shifts oder ähnliches.
+
+
 ## 🧠 Methodik & Konzeption (Für den Professor / Methodische Diskussionen)
 *Theoretische, statistische und konzeptionelle Punkte für Besprechungen.*
 
 ### 🚧 Actively Researching / Developing:
-- [ ] **Evaluierungsplot 2D-Verteilungen**: Einen klassischen 2D-Scatterplot entwickeln (vorne anstellen!), um Target und DSC für bivariate Verteilungen visuell direkt und interpretierbar gegenüberzustellen.
+
 - [ ] **Vergleich 2D vs. Bedingte 1D-Verteilung**: Konzeptionell eine Methode entwickeln, um die gemeinsame 2D-Verteilung gegen eine bedingte 1D-Verteilung (mit der einen Variablen als stetigen Einflussfaktor) vergleichen zu können.
 - [ ] **Fit-Metriken entwickeln**: Quantitative Metriken zur strikten Evaluation des Distribution-Fits (z.B. Out-of-Sample Losses, Abstandsmaße) im multivariaten Raum konzipieren.
 - [ ] **Auswertungsframework (TEA)**: Logik zur Berechnung der *Treatment Effects on the Treated Distributions* (TEA) auf mehrdimensionale Ergebnisse anpassen.
