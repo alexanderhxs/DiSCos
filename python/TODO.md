@@ -15,15 +15,9 @@
 
 ### 🚧 Actively Researching / Developing:
 
-- [ ] **Vergleich 2D vs. Bedingte 1D-Verteilung**: Konzeptionell eine Methode entwickeln, um die gemeinsame 2D-Verteilung gegen eine bedingte 1D-Verteilung (mit der einen Variablen als stetigen Einflussfaktor) vergleichen zu können.
-- [ ] **Fit-Metriken entwickeln**: Quantitative Metriken zur strikten Evaluation des Distribution-Fits (z.B. Out-of-Sample Losses, Abstandsmaße) im multivariaten Raum konzipieren.
+- [ ] **Vergleich 2D vs. Influencing Factors**: Konzeptionell eine Methode entwickeln, um die gemeinsame 2D-Verteilung gegen eine 1D-Verteilung (mit der einen Variablen als stetigen Einflussfaktor) vergleichen zu können. Dabei generell ein Framework entwickeln um diese mit einzubeziehen
 - [ ] **Auswertungsframework (TEA)**: Logik zur Berechnung der *Treatment Effects on the Treated Distributions* (TEA) auf mehrdimensionale Ergebnisse anpassen.
-
-### 🗣️ Open Discussion Points (Methodik):
-- **Konfidenzintervalle mehrdimensional**: Wie genau definieren und berechnen wir CIs für multivariate Daten sinnvoll? (Uniforme Range vs. Point-wise Quantiles über gemeinsame Dichten?).
-- **Permutationstests / Inference**: Ablauf der Permutations-Inferenz für Nd-Fälle: Soll der Fokus auf den marginalen Verteilungen liegen oder setzen wir zwingend Joint-Distribution-Teststatistiken ein?
-- **Optimierung mit LHS**: Bietet Latin Hypercube Sampling beim Sampling der Gitterpunkte (`getGrid` / S-Wasserstein Slices) eine signifikante Performance- oder Konvergenz-Steigerung?
-
+- [ ] **Tangential Wasserstein**: Einbauen von Tangential wasserstein methode als zusätzliche vergleichsmethode
 ---
 
 ## 💻 Implementierung & Softwaretechnik (Für Entwicklung / Code-Qualität)
@@ -39,10 +33,8 @@
 - [ ] **Tests schreiben**: Unit-Tests für `swasserstein.py` und modifizierte `solvers.py` Methoden hinzufügen, um Dimensions-Bugs dauerhaft abzusichern.
 - [ ] **Performance Profiling**: Radar-Rückprojektionen und Copula-Schätzungen auf große Datensätze anwenden und Laufzeiten / Memory überprüfen.
 
----
+##### 🗣️ Open Discussion Points (Methodik):
+- **Konfidenzintervalle mehrdimensional**: Wie genau definieren und berechnen wir CIs für multivariate Daten sinnvoll? (Uniforme Range vs. Point-wise Quantiles über gemeinsame Dichten?).
+- **Permutationstests / Inference**: Ablauf der Permutations-Inferenz für Nd-Fälle: Soll der Fokus auf den marginalen Verteilungen liegen oder setzen wir zwingend Joint-Distribution-Teststatistiken ein?
+- **Optimierung mit LHS**: Bietet Latin Hypercube Sampling beim Sampling der Gitterpunkte (`getGrid` / S-Wasserstein Slices) eine signifikante Performance- oder Konvergenz-Steigerung?
 
-## ✅ Recently Done (Changelog)
-- [x] **Agnostische Visualisierungen**: Plots (`plot_fit_quantiles`, `plot_fit_cdf`, etc.) dynamisieren sich jetzt solver-unabhängig für jede beliebige Datendimension.
-- [x] **S-Wasserstein Dimensions-Bugs**: `radon_transform` trennt nun Target- und Control-Samples fehlerfrei, auch bei unbalancierten Sample-Sizes (gefixt in `fit_weights`).
-- [x] **Multivariates Preprocessing**: Filterlogik für Quantile (`q_min`, `q_max`) ist jetzt vollständig broadcast-fähig für multidimensionale Zielarrays.
-- [x] **OOP Signatur-Harmonisierung**: Verdeckten Parameter-Bug (`grid_ord` als Keyword-Arg) in den Unterklassen von `BaseSolver` beseitigt, was das Bootstrapping blockierte.

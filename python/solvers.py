@@ -217,7 +217,7 @@ def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
         constraints.append(w >= 0)
         
     prob = cp.Problem(objective, constraints)
-    prob.solve()
+    prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
     
     return w.value
 
@@ -279,7 +279,7 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
         constraints = [cp.sum(w) == 1]
         
     prob = cp.Problem(obj, constraints)
-    prob.solve(solver=cp.SCS, max_iters=100000, eps=1e-6)
+    prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
     
     weights_opt = w.value
     if weights_opt is None:

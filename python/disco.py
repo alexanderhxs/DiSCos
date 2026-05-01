@@ -8,6 +8,7 @@ from .permutation import run_permutation_test
 from .utils import getGrid, myQuant
 from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, MixtureMethodResult, TargetData, ControlsData, PermutResult
 
+
 class DiSCo:
     def __init__(self, df, id_col, time_col, y_col, id_col_target, t0, 
                  M=1000, G=100, num_cores=-1, q_min=0.0, q_max=1.0, CI= False, uniform=False, perm=False, cl=0.95, B=100,
@@ -240,6 +241,7 @@ class DiSCo:
                 
                 p_res.DiSCo.cdf = eval_res.get("disco_cdf", None)
                 p_res.DiSCo.quantile = eval_res.get("disco_quantile", None)
+
         ci_out = None
         if self.CI:
             ci_out = run_bootstrap_ci(self, replace=True)
@@ -252,6 +254,8 @@ class DiSCo:
             df=self.df,
             id_col_target=self.id_col_target,
             t0=self.t0,
+            time_col=self.time_col,
+            t0_idx=self.T0_idx,
             M=self.M,
             G=self.G,
             CI=self.CI,

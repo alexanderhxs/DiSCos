@@ -103,6 +103,8 @@ class DiSCoParams:
     df: pd.DataFrame
     id_col_target: Any
     t0: Any
+    time_col: str
+    t0_idx: int
     M: int
     G: int
     CI: bool
@@ -111,6 +113,15 @@ class DiSCoParams:
     boot: int
     q_min: float
     q_max: float
+
+@dataclass
+class PreTreatmentFitMetrics:
+    w1: float
+    energy_dist: float
+    cov_error: float
+    marginal_ks: List[float]
+    marginal_mean_diff: List[float]
+    metrics_per_period: Dict[int, Dict[str, Any]]
 
 @dataclass
 class DiSCoResult:
