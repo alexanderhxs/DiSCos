@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 import logging
-from .solvers import disco_weights_reg, disco_mixture
-from .models import PermutResult
-from .utils import myQuant, getGrid
+from ..solvers import disco_weights_reg, disco_mixture
+from ..models import PermutResult
+from ..utils.utils import myQuant, getGrid
 
 def run_permutation_test(disco_instance, peridx=None):
     """

@@ -4,6 +4,8 @@ from scipy.optimize import lsq_linear, minimize
 from .swasserstein import radon_transform
 from .utils import myQuant
 from abc import ABC, abstractmethod
+import ot
+import torch
 
 class BaseSolver(ABC):
     @abstractmethod
@@ -12,7 +14,7 @@ class BaseSolver(ABC):
         pass
         
     @abstractmethod
-    def evaluate_counterfactual(self, target, controls, weights, **kwargs):     
+    def evaluate_counterfactual(self, controls, weights, **kwargs):     
         """Returns the specific geometry data for synthetic control matching 
         (e.g., CDF/Quantiles on fixed grids, or pure 2D samples)."""
         pass
@@ -26,7 +28,7 @@ class Quantile1DSolver(BaseSolver):
     def fit_weights(self, target, controls, M=500, simplex=False, q_min=0, q_max=1, **kwargs):
         return disco_weights_reg(controls, target, M, simplex, q_min, q_max)    
         
-    def evaluate_counterfactual(self, target, controls, weights, **kwargs):
+    def evaluate_counterfactual(self,  controls, weights, **kwargs):
         grid_ord = kwargs.get("grid_ord")
         controls_q = kwargs.get("controls_q", np.array([]))
 
@@ -58,7 +60,7 @@ class MixtureSolver(BaseSolver):
         res = disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex)
         return res["weights_opt"]
         
-    def evaluate_counterfactual(self, target, controls, weights, **kwargs):     
+    def evaluate_counterfactual(self,  controls, weights, **kwargs):     
         grid_ord = kwargs.get("grid_ord")
         evgrid = kwargs.get("evgrid")
         controls_cdf = kwargs.get("controls_cdf", np.array([]))
@@ -87,7 +89,7 @@ class MixtureSolver(BaseSolver):
 
 
 class SlicedWassersteinSolver(Quantile1DSolver):
-    def __init__(self, n_slices=10000):
+    def __init__(self, n_slices=1000):
         super().__init__()
         self.n_slices = n_slices
 
@@ -104,21 +106,72 @@ class SlicedWassersteinSolver(Quantile1DSolver):
         
         return weights 
     
-    def evaluate_counterfactual(self, target, controls, weights, **kwargs):     
-        grid_ord = kwargs.get("grid_ord")
-        evgrid = kwargs.get("evgrid")
-        controls_cdf = kwargs.get("controls_cdf", np.array([]))
-        
-        #TODO: Directional/Sliced Wasserstein CDF/Quantile Berechnung hier implementieren
-        if len(controls_cdf) > 0 and weights is not None:
-            disco_cdf = controls_cdf @ weights
-            disco_quantile = np.array([grid_ord[np.argmax(disco_cdf >= (y - 1e-5))] for y in evgrid])
+    def evaluate_counterfactual(self, controls, weights, **kwargs):
+        grid_ord = kwargs.get('grid_ord')
+
+        # In Wasserstein space (mixture=False), the counterfactual is the 
+        # Sliced Wasserstein Barycenter of the control distributions.
+        if weights is not None:
+            dim = controls[0].shape[1]
+            M = kwargs.get('M', 500)
+            n_iters = 500
+            n_slices = kwargs.get('n_slices', self.n_slices)
+            
+            # Initialize Y cleanly without target data to avoid data leakage.
+            # A great starting point (Y_init) is the weighted sum of marginal quantiles.
+            q_vec = np.linspace(0, 1, M)
+            Y_init = np.zeros((M, dim))
+            for j, ctrl in enumerate(controls):
+                for d in range(dim):
+                    Y_init[:, d] += weights[j] * myQuant(ctrl[:, d], q_vec)
+
+            # 1. Generate random projections for controls only using swasserstein logic
+            # Pass controls[0] as the target param and controls[1:] as controls 
+            # to strictly project control data without data leakage.
+            radon_result = radon_transform(controls[0], controls[1:], n_slices=n_slices, sort_output=False)
+            projected_data = radon_result['projected_data']
+            directions = radon_result['directions']
+            
+            # 2. Compute target 1D quantiles for each slice mathematically
+            controls_projections = np.zeros((M, n_slices))
+            offset = 0
+            
+            for j, ctrl in enumerate(controls):
+                n_c = len(ctrl)
+                c_block = projected_data[offset : offset + n_c, :]
+                controls_projections += weights[j] * myQuant(c_block, q_vec)
+                offset += n_c
+                
+            # 3. Optimize point cloud Y in PyTorch to match these barycenter projections
+            controls_proj_t= torch.tensor(controls_projections, dtype=torch.float32)
+            proj_t = torch.tensor(directions, dtype=torch.float32)
+            
+            Y = torch.tensor(Y_init, dtype=torch.float32, requires_grad=True)
+            optimizer = torch.optim.Adam([Y], lr=0.05)
+            
+            for _ in range(n_iters):
+                optimizer.zero_grad()
+                
+                # Project Y onto all slices
+                y_proj = Y @ proj_t # (M, n_slices)
+                y_proj_sorted, _ = torch.sort(y_proj, dim=0)
+                
+                loss = torch.mean((y_proj_sorted - controls_proj_t)**2)
+                loss.backward()
+                optimizer.step()
+                
+            Y_opt = Y.detach().numpy()
+            
+            # Evaluate the multidimensional eCDF of the resulting barycenter point cloud on grid_ord
+            if grid_ord is not None and len(grid_ord) > 0:
+                disco_cdf = np.mean(np.all(Y_opt[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+            else:
+                disco_cdf = None
         else:
             disco_cdf = None
-            disco_quantile = None
 
         return {
-            "disco_quantile": disco_quantile,
+            "disco_quantile": None,
             "disco_cdf": disco_cdf
         }
     
@@ -300,3 +353,110 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_rand, M, simplex):
         "target_order": target_order,
         "cdf": cdf_matrix
     }
+
+
+
+class TangentialWassersteinSolver(BaseSolver):
+    def __init__(self, method='emd'):
+        super().__init__()
+        self.method = method
+
+    def baryc_proj(self, source, target):
+        """Barycentric projection of target onto source."""
+        n1, p = source.shape
+        n2 = target.shape[0]   
+        a_ones, b_ones = np.ones((n1,)) / n1, np.ones((n2,)) / n2
+        
+        M = ot.dist(source, target)
+        M = M.astype('float64')
+        if M.max() > 0:
+            M /= M.max()
+        
+        if self.method == 'emd':
+            OTplan = ot.emd(a_ones, b_ones, M, numItermax=int(1e7))
+        elif self.method == 'entropic':
+            OTplan = ot.bregman.sinkhorn_stabilized(a_ones, b_ones, M, reg=5e-3)
+        else:
+            raise ValueError("Method must be 'emd' or 'entropic'")
+        
+        # conditional expectation directly via matrix multiplication
+        # OTplan shape is (n1, n2). We normalize rows.
+        row_sums = OTplan.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1e-16 # prevent division by zero
+        OTplan_normalized = OTplan / row_sums
+        
+        OTmap = OTplan_normalized @ target
+        return OTmap.astype('float32')
+
+    def fit_weights(self, target, controls, **kwargs):
+        n, d = target.shape
+        J = len(controls)
+        
+        # Barycentric Projection
+        self.G_list = []
+        proj_list = []
+        for i in range(J):
+            temp = self.baryc_proj(target, controls[i])
+            self.G_list.append(temp)
+            proj_list.append(temp - target)
+            
+        # Obtain optimal weights. 
+        # (We use cvxpy directly here instead of disco_weights_reg because 
+        # disco_weights_reg automatically sorts data via myQuant, 
+        # which breaks the strict pointwise matching of the Tangential-Projections).
+        S = np.mean(target) * n * d * J if np.mean(target) != 0 else 1.0 # Stabilizer
+        S = np.abs(S) 
+        mylambda = cp.Variable(J)
+
+        # C * w - d_vec equivalent
+        # cvxpy cp.sum over a list of matrices does not preserve the DCP properties for sum_squares properly here.
+        # Instead, reshape proj_list to a matrix explicitly.
+        proj_flat = np.array([p.flatten() for p in proj_list]).T  # shape: (n*d, J)
+        objective = cp.Minimize(cp.sum_squares(proj_flat @ mylambda) / S)
+        
+        simplex = kwargs.get("simplex", True)
+        if simplex:
+            constraints = [mylambda >= 0, cp.sum(mylambda) == 1]
+        else:
+            constraints = [cp.sum(mylambda) == 1]
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
+        
+        return mylambda.value
+        
+    def evaluate_counterfactual(self, controls, weights, **kwargs):
+        target = kwargs.get("target")
+        grid_ord = kwargs.get("grid_ord")
+        
+        if weights is not None and target is not None:
+            # Reconstruct the barycenter directly in the tangent space
+            # using the saved G_list mapped during fit_weights
+            counterfactual_points = np.zeros_like(target, dtype='float32')
+            for i, w in enumerate(weights):
+                counterfactual_points += w * self.G_list[i]
+                
+            # Evaluate the multidimensional eCDF of the resulting barycenter point cloud on grid_ord
+            if grid_ord is not None and len(grid_ord) > 0:
+                disco_cdf = np.mean(np.all(counterfactual_points[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+            else:
+                disco_cdf = None
+        else:
+            disco_cdf = None
+
+        return {
+            "disco_quantile": None,
+            "disco_cdf": disco_cdf
+        }
+
+    def compute_distance(self, target, controls, weights, **kwargs):
+        # The Tangential Wasserstein distance is effectively the Objective value
+        # or the sum of squared differences of the final projection vs target.
+        if weights is None: return 0.0
+        
+        counterfactual_points = np.zeros_like(target, dtype='float32')
+        for i, w in enumerate(weights):
+            counterfactual_points += w * self.G_list[i]
+            
+        dist = np.mean((counterfactual_points - target)**2)
+        return dist

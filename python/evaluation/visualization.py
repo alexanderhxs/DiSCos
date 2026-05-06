@@ -8,7 +8,7 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
         
     period_res = fit_synth.results_periods[period]
     # Check if target data is multidimensional
-    is_multi = len(period_res.target.data.shape) > 1 and period_res.target.data.shape[1] > 1
+    is_multi = fit_synth.params.is_multivariate
     
     if is_multi:
         dim = period_res.target.data.shape[1]
@@ -120,7 +120,7 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
         period = periods[-1]
         
     period_res = fit_synth.results_periods[period]
-    is_multi = len(period_res.target.data.shape) > 1 and period_res.target.data.shape[1] > 1
+    is_multi = fit_synth.params.is_multivariate
     
     if is_multi:
         dim = period_res.target.data.shape[1]
@@ -211,7 +211,7 @@ def plot_fit_copula(fit_synth, period=None):
         
     period_res = fit_synth.results_periods[period]
     target_data = period_res.target.data
-    is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
+    is_multi = fit_synth.params.is_multivariate
     
     if not is_multi:
         print("Joint Plot wird nur für 2D Daten unterstützt.")
@@ -293,7 +293,7 @@ def plot_fit_joint_contour(fit_synth, period=None):
         
     period_res = fit_synth.results_periods[period]
     target_data = period_res.target.data
-    is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
+    is_multi = fit_synth.params.is_multivariate
     
     if not is_multi:
         print("Joint Contour Plot wird nur für 2D Daten unterstützt.")
@@ -393,7 +393,7 @@ def plot_fit_scatter2d(fit_synth, period=None):
         
     period_res = fit_synth.results_periods[period]
     target_data = period_res.target.data
-    is_multi = len(target_data.shape) > 1 and target_data.shape[1] == 2
+    is_multi = fit_synth.params.is_multivariate
     
     if not is_multi:
         print("2D Scatterplot wird nur für 2D Daten unterstützt.")

@@ -1,8 +1,8 @@
 import numpy as np
 from joblib import Parallel, delayed
-from .solvers import disco_weights_reg, disco_mixture
-from .utils import getGrid, myQuant
-from .models import CIResult, CIBand, CIWeights, CIBootmat
+from ..solvers import disco_weights_reg, disco_mixture
+from ..utils.utils import getGrid, myQuant
+from ..models import CIResult, CIBand, CIWeights, CIBootmat
 
 def disco_ci_iter(t, controls_t, target_t, grid_t, T0, solver, M=1000,
                   evgrid=np.linspace(0, 1, 1001), simplex=False, replace=True):

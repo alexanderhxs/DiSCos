@@ -37,15 +37,9 @@ class DiSCoMethodResult:
     cdf: Optional[np.ndarray] = None
 
 @dataclass
-class MixtureMethodResult:
-    weights: Optional[np.ndarray]
-    distance: Optional[float] = None
-    mean: Optional[np.ndarray] = None
 
-@dataclass
 class PeriodResult:
     DiSCo: DiSCoMethodResult
-    mixture: Optional[MixtureMethodResult]
     target: TargetData
     controls: ControlsData
 
@@ -105,6 +99,7 @@ class DiSCoParams:
     t0: Any
     time_col: str
     t0_idx: int
+    is_multivariate: bool
     M: int
     G: int
     CI: bool

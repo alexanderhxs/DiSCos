@@ -2,17 +2,17 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from .solvers import disco_weights_reg, disco_mixture, Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver
-from .inference import run_bootstrap_ci
-from .permutation import run_permutation_test
-from .utils import getGrid, myQuant
-from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, MixtureMethodResult, TargetData, ControlsData, PermutResult
+from .solvers import Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver, TangentialWassersteinSolver
+from .inference.inference import run_bootstrap_ci
+from .inference.permutation import run_permutation_test
+from .utils.utils import getGrid, myQuant
+from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, TargetData, ControlsData, PermutResult
 
 
 class DiSCo:
     def __init__(self, df, id_col, time_col, y_col, id_col_target, t0, 
                  M=1000, G=100, num_cores=-1, q_min=0.0, q_max=1.0, CI= False, uniform=False, perm=False, cl=0.95, B=100,
-                 mixture=False, simplex=False, seed=None):
+                 mixture=False, simplex=False, seed=None, **kwargs):
         """
         Distributional Synthetic Controls
         
@@ -44,14 +44,32 @@ class DiSCo:
         self.mixture = mixture
         self.simplex = simplex
         
-        # Instantiate solver strategy
-        if self.mixture:
-            self.solver = MixtureSolver()
+        if isinstance(self.y_col, (list, tuple)) or len(df[self.y_col].shape) > 1:
+            self.is_multivariate = True
         else:
-            if isinstance(self.y_col, (list, tuple)) or len(df[self.y_col].shape) > 1:
-                self.solver = SlicedWassersteinSolver(n_slices=100)
+            self.is_multivariate = False
+
+        # Explizite Methodenauswahl oder Fallback auf Standard-Logik
+        method = kwargs.get("method")
+        
+        if method == "tangential":
+            self.solver = TangentialWassersteinSolver(method=kwargs.get("ot_method", "emd"))
+        elif method == "sliced":
+            self.solver = SlicedWassersteinSolver(n_slices=kwargs.get("n_slices", 1000))
+        elif method == "mixture":
+            self.mixture = True
+            self.solver = MixtureSolver()
+        elif method == "1d":
+            self.solver = Quantile1DSolver()
+        else:
+            # Standard-Logik, wenn keine Methode explizit gewählt wurde
+            if self.mixture:
+                self.solver = MixtureSolver()
+            elif self.is_multivariate:
+                self.solver = SlicedWassersteinSolver(n_slices=kwargs.get("n_slices", 1000))
             else:
                 self.solver = Quantile1DSolver()
+                
         self.CI = CI
         self.cl = cl
         self.B = B
@@ -67,7 +85,6 @@ class DiSCo:
         min_time = self.df[self.time_col].min()
         self.df['t_col'] = self.df[self.time_col] - min_time + 1
         
-        # FIX: T0_idx determines the number of PRE-treatment periods.
         # Strict mapping to the exact t_col corresponding to t0, minus 1 just like in R's DiSCo.R
         t0_mapped = self.df[self.df[self.time_col] == self.t0]['t_col'].unique()
         if len(t0_mapped) == 0:
@@ -122,12 +139,12 @@ class DiSCo:
             return None
 
         # Evaluating the quantile functions on the grid "evgrid"
-        try:
+        if self.is_multivariate:
+            controls_q = None
+        else:
             controls_q = np.zeros((len(self.evgrid), len(controls_data)))
             for jj, ctrl in enumerate(controls_data):
                 controls_q[:, jj] = myQuant(ctrl, self.evgrid)
-        except Exception as e:
-            controls_q = None
 
         # Sample grid
         grid_min, grid_max, grid_rand, grid_ord = getGrid(target_data, controls_data, self.G)
@@ -169,9 +186,11 @@ class DiSCo:
             )
             
         disco_res = DiSCoMethodResult(weights=weights)
-        # Mixture is kept temporarily for plotting logic but no longer acts as explicit branches here
-        mixture_res = MixtureMethodResult(weights=weights) if self.mixture else None
-        target_q = myQuant(target_data, self.evgrid)
+        
+        if self.is_multivariate:
+            target_q = None
+        else:
+            target_q = myQuant(target_data, self.evgrid)
 
         target_obj = TargetData(
             cdf=cdf_t,
@@ -188,7 +207,6 @@ class DiSCo:
 
         period_result = PeriodResult(
             DiSCo=disco_res,
-            mixture=mixture_res,
             target=target_obj,
             controls=controls_obj
         )
@@ -240,7 +258,10 @@ class DiSCo:
                 )
                 
                 p_res.DiSCo.cdf = eval_res.get("disco_cdf", None)
-                p_res.DiSCo.quantile = eval_res.get("disco_quantile", None)
+                if self.is_multivariate:
+                    p_res.DiSCo.quantile = None
+                else:
+                    p_res.DiSCo.quantile = eval_res.get("disco_quantile", None)
 
         ci_out = None
         if self.CI:
@@ -256,6 +277,7 @@ class DiSCo:
             t0=self.t0,
             time_col=self.time_col,
             t0_idx=self.T0_idx,
+            is_multivariate=self.is_multivariate,
             M=self.M,
             G=self.G,
             CI=self.CI,
