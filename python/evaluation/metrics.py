@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Dict, List, Optional
-from models import PeriodResult, PreTreatmentFitMetrics, DiSCoResult
+from ..models import PeriodResult, PreTreatmentFitMetrics, DiSCoResult
 from scipy.stats import wasserstein_distance, energy_distance, ks_2samp
 import ot
 import scoringrules as sr
