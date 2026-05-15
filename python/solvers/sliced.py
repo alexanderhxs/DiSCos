@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from ..utils.utils import myQuant
+from ..utils import myQuant
 from ..utils.swasserstein import radon_transform
 from .quantile1d import Quantile1DSolver, disco_weights_reg
 

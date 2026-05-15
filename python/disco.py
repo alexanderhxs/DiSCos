@@ -2,10 +2,10 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from .solvers import Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver, TangentialWassersteinSolver
+from .solvers import Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver, TangentialWassersteinSolver, EnergySolver
 from .inference.inference import run_bootstrap_ci
 from .inference.permutation import run_permutation_test
-from .utils.utils import getGrid, myQuant
+from .utils import getGrid, myQuant
 from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, TargetData, ControlsData, PermutResult
 
 
@@ -61,6 +61,8 @@ class DiSCo:
             self.solver = MixtureSolver()
         elif method == "1d":
             self.solver = Quantile1DSolver()
+        elif method =='energy':
+            self.solver = EnergySolver()
         else:
             # Standard-Logik, wenn keine Methode explizit gewählt wurde
             if self.mixture:
@@ -147,7 +149,7 @@ class DiSCo:
                 controls_q[:, jj] = myQuant(ctrl, self.evgrid)
 
         # Sample grid
-        grid_min, grid_max, grid_rand, grid_ord = getGrid(target_data, controls_data, self.G)
+        grid_min, grid_max, grid_ord = getGrid(target_data, controls_data, self.G)
         
         # Precompute empirical CDFs for target and controls directly over the grid.
         # This gives BaseSolvers universal access to CDF data.
@@ -179,7 +181,7 @@ class DiSCo:
                 controls=controls_data, 
                 grid_min=grid_min, 
                 grid_max=grid_max, 
-                grid_rand=grid_rand, 
+                grid_ord=grid_ord, 
                 M=self.M, 
                 simplex=self.simplex,
                 q_min=0, q_max=1

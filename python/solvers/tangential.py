@@ -7,6 +7,7 @@ class TangentialWassersteinSolver(BaseSolver):
     def __init__(self, method='emd'):
         super().__init__()
         self.method = method
+        self.G_list = []
 
     def baryc_proj(self, source, target):
         n1, p = source.shape

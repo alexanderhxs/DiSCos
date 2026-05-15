@@ -1,6 +1,6 @@
 import copy
 import numpy as np
-from ..utils.utils import myQuant
+from ..utils import myQuant
 from .base import BaseTEA
 
 class MarginalTEA(BaseTEA):

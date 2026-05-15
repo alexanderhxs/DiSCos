@@ -48,6 +48,25 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
             ax.plot(q_grid, target_quantiles, color='black', linewidth=3, label='Target')
             ax.plot(q_grid, synth_quantiles, color='red', linewidth=3, label='DSC')
             
+            if hasattr(fit_synth, 'CI') and fit_synth.CI is not None and getattr(fit_synth.CI.bootmat, 'weights', None) is not None:
+                n_boots = fit_synth.CI.bootmat.weights.shape[1]
+                boot_synth_quantiles = np.zeros((n_boots, len(q_grid)))
+                
+                for b in range(n_boots):
+                    b_weights = fit_synth.CI.bootmat.weights[:, b]
+                    b_synth_cdf = np.zeros_like(grid)
+                    for c_data, w in zip(controls_data, b_weights):
+                        if w > 1e-5 and len(c_data) > 0:
+                            b_synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
+                            
+                    boot_synth_quantiles[b, :] = np.array([grid[np.searchsorted(b_synth_cdf, q)] if q <= b_synth_cdf[-1] else grid[-1] for q in q_grid])
+                
+                alpha = 1 - fit_synth.params.cl
+                lower = np.quantile(boot_synth_quantiles, alpha / 2, axis=0)
+                upper = np.quantile(boot_synth_quantiles, 1 - (alpha / 2), axis=0)
+                ax.plot(q_grid, lower, color='red', linewidth=1, linestyle='--', label='CI (DSC)')
+                ax.plot(q_grid, upper, color='red', linewidth=1, linestyle='--')
+
             if show_controls:
                 for i, c_data in enumerate(controls_data):
                     if len(c_data) > 0:
@@ -146,6 +165,24 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
             ax.plot(grid, target_cdf, label="Target", color="black", linewidth=3)
             ax.plot(grid, synth_cdf, label="DSC", color="red", linewidth=3)
             
+            if hasattr(fit_synth, 'CI') and fit_synth.CI is not None and getattr(fit_synth.CI.bootmat, 'weights', None) is not None:
+                n_boots = fit_synth.CI.bootmat.weights.shape[1]
+                boot_synth_cdf = np.zeros((n_boots, len(grid)))
+                
+                for b in range(n_boots):
+                    b_weights = fit_synth.CI.bootmat.weights[:, b]
+                    b_cdf = np.zeros_like(grid)
+                    for c_data, w in zip(controls_data, b_weights):
+                        if w > 1e-5 and len(c_data) > 0:
+                            b_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
+                    boot_synth_cdf[b, :] = b_cdf
+                
+                alpha = 1 - fit_synth.params.cl
+                lower = np.quantile(boot_synth_cdf, alpha / 2, axis=0)
+                upper = np.quantile(boot_synth_cdf, 1 - (alpha / 2), axis=0)
+                ax.plot(grid, lower, color='red', linewidth=1, linestyle='--', label='CI (DSC)')
+                ax.plot(grid, upper, color='red', linewidth=1, linestyle='--')
+
             if show_controls:
                 for i, c_data in enumerate(controls_data):
                     if len(c_data) > 0:
@@ -229,30 +266,21 @@ def plot_fit_copula(fit_synth, period=None):
     u_target = rankdata(target_data[:, 0]) / N
     v_target = rankdata(target_data[:, 1]) / N
     
-    # DSC Mixture Pooling
-    pool_x = []
-    pool_y = []
-    pool_w = []
+    from ..utils import sample_counterfactual_distribution
+    grid = period_res.target.grid
+    disco_dist = sample_counterfactual_distribution(period_res.controls.data, weights, grid=grid, num_samples=N)
     
-    for c_data, w in zip(controls_data, filtered_weights):
-        pool_x.extend(c_data[:, 0])
-        pool_y.extend(c_data[:, 1])
-        pool_w.extend([w / len(c_data)] * len(c_data))
-            
-    pool_x = np.array(pool_x)
-    pool_y = np.array(pool_y)
-    pool_w = np.array(pool_w)
+    if disco_dist is None or len(disco_dist) == 0:
+        return
+        
+    u_dsc = np.empty(len(disco_dist))
+    v_dsc = np.empty(len(disco_dist))
     
-    # Marginale EDFs für Mischung bilden => F_dsc(x)
-    sort_idx_x = np.argsort(pool_x)
-    ecdf_x_vals = np.cumsum(pool_w[sort_idx_x])
-    u_dsc = np.empty_like(pool_x)
-    u_dsc[sort_idx_x] = ecdf_x_vals
-
-    sort_idx_y = np.argsort(pool_y)
-    ecdf_y_vals = np.cumsum(pool_w[sort_idx_y])
-    v_dsc = np.empty_like(pool_y)
-    v_dsc[sort_idx_y] = ecdf_y_vals
+    sort_idx_x = np.argsort(disco_dist[:, 0])
+    u_dsc[sort_idx_x] = (np.arange(len(disco_dist)) + 1) / len(disco_dist)
+    
+    sort_idx_y = np.argsort(disco_dist[:, 1])
+    v_dsc[sort_idx_y] = (np.arange(len(disco_dist)) + 1) / len(disco_dist)
     
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     
@@ -261,12 +289,8 @@ def plot_fit_copula(fit_synth, period=None):
     axes[0].set_xlabel('Rank Dim 1 ($F_1$)', fontsize=12)
     axes[0].set_ylabel('Rank Dim 2 ($F_2$)', fontsize=12)
     
-    # Sample N points prop to weights to keep density scatter visually comparable
-    pool_w_norm = pool_w / np.sum(pool_w)
-    sample_idx = np.random.choice(len(pool_x), size=N, p=pool_w_norm)
-    
-    axes[1].scatter(u_dsc[sample_idx], v_dsc[sample_idx], alpha=0.5, s=20, c='red')
-    axes[1].set_title('DSC Copula (Weighted Mixture)', fontsize=14)
+    axes[1].scatter(u_dsc, v_dsc, alpha=0.5, s=20, c='red')
+    axes[1].set_title('DSC Copula (Sampled)', fontsize=14)
     axes[1].set_xlabel('Rank Dim 1 ($F_1$)', fontsize=12)
     
     for ax in axes:
@@ -410,35 +434,16 @@ def plot_fit_scatter2d(fit_synth, period=None):
     x_t = target_data[:, 0]
     y_t = target_data[:, 1]
     
-    # DSC Mixture Pooling
-    pool_x = []
-    pool_y = []
-    pool_w = []
-    
-    for c_data, w in zip(controls_data, filtered_weights):
-        pool_x.extend(c_data[:, 0])
-        pool_y.extend(c_data[:, 1])
-        # Das Gewicht des einzelnen Datenpunktes ist das Gewicht der Control-Unit 
-        # aufgeteilt auf die Anzahl ihrer Beobachtungen
-        pool_w.extend([w / len(c_data)] * len(c_data))
-            
-    pool_x = np.array(pool_x)
-    pool_y = np.array(pool_y)
-    pool_w = np.array(pool_w)
-    
-    # Um zu verhindern, dass Punkte der DSC mit extrem kleinen Gewichten den Plot überlagern,
-    # normieren wir die Gewichte für die Visualisierung leicht und sampeln Punkte oder
-    # zeichnen sie mit Transparenz (alpha proportional zum Gewicht).
-    
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    # Variante 1: Samplen der DSC-Punkte nach Gewichtung, passend zur Target-Länge
     N = len(target_data)
-    pool_w_norm = pool_w / np.sum(pool_w)
-    sample_idx = np.random.choice(len(pool_x), size=N, p=pool_w_norm)
+    from ..utils import sample_counterfactual_distribution
+    grid = period_res.target.grid
+    disco_dist = sample_counterfactual_distribution(period_res.controls.data, weights, grid=grid, num_samples=N)
     
-    # Scatter Plots
-    ax.scatter(pool_x[sample_idx], pool_y[sample_idx], alpha=0.6, s=30, color='red', label='DSC (Sampled)')
+    if disco_dist is not None and len(disco_dist) > 0:
+        ax.scatter(disco_dist[:, 0], disco_dist[:, 1], alpha=0.6, s=30, color='red', label='DSC (Sampled)')
+        
     ax.scatter(x_t, y_t, alpha=0.7, s=30, color='black', label='Target')
     
     ax.set_title('2D Scatterplot (Bivariate Distribution)', fontsize=14)

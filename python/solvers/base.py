@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import numpy as np
 
 class BaseSolver(ABC):
     @abstractmethod
@@ -16,3 +17,5 @@ class BaseSolver(ABC):
     def compute_distance(self, target, controls, weights, **kwargs):
         """Compute the distance metric used for inference/permutation."""
         pass
+    
+    

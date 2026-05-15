@@ -4,7 +4,7 @@ from joblib import Parallel, delayed
 import logging
 from ..solvers import disco_weights_reg, disco_mixture
 from ..models import PermutResult
-from ..utils.utils import myQuant, getGrid
+from ..utils import myQuant, getGrid
 
 def run_permutation_test(disco_instance, peridx=None):
     """
@@ -19,13 +19,11 @@ def run_permutation_test(disco_instance, peridx=None):
         
     c_df = {}
     t_df = {}
-    c_df_q = {}
     
     for t in disco_instance.periods:
         res_t = disco_instance.results_by_period[t]
         
         c_df[t] = res_t.controls.data
-        c_df_q[t] = res_t.controls.quantiles
         t_df[t] = res_t.target.data
         
     # Standardize dist_t
@@ -37,20 +35,17 @@ def run_permutation_test(disco_instance, peridx=None):
             target=res_t.target.data,
             controls=res_t.controls.data,
             weights=disco_instance.weights_opt,
-            target_q=res_t.target.quantiles,
-            controls_q=res_t.controls.quantiles,
-            target_cdf=res_t.target.cdf,
-            controls_cdf=res_t.controls.cdf
+            grid_ord=res_t.target.grid,
         )
             
     # Parallel permutation
     total_perms = len(peridx)
     logging.info(f"Starting {total_perms} permutation tests...")
-    
+    distp = []
     distp = Parallel(n_jobs=disco_instance.num_cores)(
         delayed(_disco_per_iter)(
-            idx, c_df, c_df_q, t_df, 
-            disco_instance.T0_idx, peridx, disco_instance.evgrid,
+            idx, c_df, t_df, 
+            disco_instance.T0_idx, peridx, 
             disco_instance.results_by_period,
             disco_instance.M, disco_instance.simplex, disco_instance.solver
         ) for idx in peridx
@@ -71,7 +66,7 @@ def run_permutation_test(disco_instance, peridx=None):
         plot=None
     )
 
-def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_period, M, simplex, solver):
+def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, solver):
     """
     Run one iteration of the permutation test.
     idx is the index from peridx of the new "target" unit.
@@ -79,68 +74,67 @@ def _disco_per_iter(idx, c_df, c_df_q, t_df, T0, peridx, evgrid, results_by_peri
     periods = list(c_df.keys())
     
     perc = {t: [] for t in periods}
-    perc_q = {t: [] for t in periods}
     pert = {t: None for t in periods}
     
     keepcon = [p for p in peridx if p != idx]
     
     for t in periods:
         perc[t].append(t_df[t])
-        perc_q[t].append(results_by_period[t].target.quantiles)
         
         for j in keepcon:
             perc[t].append(c_df[t][j])
-            perc_q[t].append(c_df_q[t][:, j])
             
         pert[t] = c_df[t][idx]
-        perc_q[t] = np.column_stack(perc_q[t])
         
     # Calculate lambda for t <= T0
     lambda_tp = []
-    perc_cdf = {}
-    
-    for t_idx, t in enumerate(periods):
-        if type(solver).__name__ != 'MixtureSolver':
-            if t <= T0:
-                w = disco_weights_reg(perc[t], pert[t], M=M, simplex=simplex)
-                lambda_tp.append(w)
-        else:
-            # We need the CDF matrix for all t to calculate distillation distances
+
+    for t in periods:
+        if t > T0:
+            continue
+        
+        target_data = np.asarray(pert[t])
+        controls_data = [np.asarray(c) for c in perc[t][1:]]
+        
+        if len(target_data) > 0 and len(controls_data) > 0:
             G_grid = len(results_by_period[t].target.grid) - 1
-            grid_min, grid_max, grid_rand, grid_ord = getGrid(pert[t], perc[t], G_grid)
-            
-            num_controls = len(perc[t])
-            cdf_matrix = np.zeros((len(grid_rand), num_controls + 1))
-            
-            target_sorted = np.sort(pert[t])
-            cdf_matrix[:, 0] = np.searchsorted(target_sorted, grid_rand, side='right') / len(pert[t])
-            
-            for k, ctrl in enumerate(perc[t]):
-                ctrl_sorted = np.sort(ctrl)
-                cdf_matrix[:, k+1] = np.searchsorted(ctrl_sorted, grid_rand, side='right') / len(ctrl)
-                
-            perc_cdf[t] = cdf_matrix
-            
-            if t <= T0:
-                res = disco_mixture(perc[t], pert[t], grid_min, grid_max, grid_ord, M, simplex)
-                lambda_tp.append(res['weights_opt'])
-                
+            grid_min, grid_max, grid_ord = getGrid(target_data, controls_data, G_grid)
+
+            res = solver.fit_weights(
+                target=target_data,
+                controls=controls_data,
+                grid_min=grid_min,
+                grid_max=grid_max,
+                grid_ord=grid_ord,
+                M=M,
+                simplex=simplex
+            )
+            lambda_tp.append(res)
+        else:
+            print(f"Skipping period {t} for permutation {idx} due to insufficient data or post-treatment period.")
+            lambda_tp.append(np.ones(len(controls_data)) / len(controls_data))
+
     # Average optimal lambda
     lambda_opt = np.mean(lambda_tp, axis=0)
-    
     dist = np.zeros(len(periods))
-    
-    # Eval dist
-    for i, t in enumerate(periods):
-        if type(solver).__name__ != 'MixtureSolver':
-            bc_t = perc_q[t] @ lambda_opt
-            target_q = myQuant(pert[t], evgrid)
-            dist[i] = np.mean((bc_t - target_q)**2)
-        else:
-            bc_t = perc_cdf[t][:, 1:] @ lambda_opt
-            target_q = perc_cdf[t][:, 0]
-            dist[i] = np.mean((bc_t - target_q)**2)
+    # Calculate counterfactual and distance for post treatment periods
+    for idx, t in enumerate(periods):
+        target_data = np.asarray(pert[t])
+        controls_data = [np.asarray(c) for c in perc[t][1:]]
+        
+        if len(target_data) > 0 and len(controls_data) > 0:
+            G_grid = len(results_by_period[t].target.grid) - 1
+            _, _, grid_ord_perm = getGrid(target_data, controls_data, G_grid)
             
+            dist[idx] = solver.compute_distance(
+                target=target_data,
+                controls=controls_data,
+                weights=lambda_opt,
+                grid_ord=grid_ord_perm,
+            )
+        else:
+            dist[idx] = np.nan
+        
     return dist
 
 def _disco_per_rank(dist_t, dist_p_matrix, T0_idx):

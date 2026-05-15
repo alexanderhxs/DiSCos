@@ -64,6 +64,7 @@ class CIBootmat:
     cdf: np.ndarray
     quantile_diff: np.ndarray
     cdf_diff: np.ndarray
+    weights: np.ndarray = None
 
 @dataclass
 class CIResult:
@@ -112,7 +113,7 @@ class DiSCoParams:
 @dataclass
 class PreTreatmentFitMetrics:
     w1: float
-    energy_dist: float
+    energy_divergence: float
     cov_error: float
     marginal_ks: List[float]
     marginal_mean_diff: List[float]

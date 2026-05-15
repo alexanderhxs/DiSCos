@@ -1,6 +1,6 @@
 from .disco import DiSCo
 from .solvers import disco_weights_reg, disco_mixture
-from .utils.utils import myQuant, getGrid
+from .utils import myQuant, getGrid
 from .tea import disco_tea
 from .models import DiSCoTEAResult
 

@@ -54,4 +54,68 @@ def getGrid(target, controls, G):
     else:
         grid_ord = grid_rand
     
-    return grid_min, grid_max, grid_rand, grid_ord
+    return grid_min, grid_max, grid_ord
+
+def sample_counterfactual_distribution(controls, weights, grid, num_samples=None):
+
+    if len(controls) > 0 and weights is not None:
+        w = np.clip(weights, 0, None) # clip for sampling
+        w_sum = w.sum()
+        w = w / w_sum if w_sum > 0 else np.ones(len(w)) / len(w)
+        
+        positive_idx = np.where(w > 0)[0]
+        chosen_controls = [controls[i] for i in positive_idx]
+        choosen_conrols_weights = w[positive_idx]
+
+        if num_samples is None:
+            capacities = np.array([len(c) for c in chosen_controls]) / choosen_conrols_weights
+            num_samples = int(np.floor(np.min(capacities)))
+
+        strata_sizes = num_samples * choosen_conrols_weights
+        strata_sizes = np.round(strata_sizes).astype(int)
+
+        if strata_sizes.sum() != num_samples:
+            idx = strata_sizes.argmax() # Korrigieren der größten Strata, um die Gesamtzahl der Samples zu erreichen
+            strata_sizes[idx] += int(num_samples - strata_sizes.sum())   
+
+        samples = []
+        for i, ctrl in enumerate(chosen_controls):
+            k = strata_sizes[i]
+            if k <= 0:
+                continue
+                
+            ctrl_arr = np.asarray(ctrl)
+            
+            # ECDF calculation on grid (1D and Multi-D)
+            if ctrl_arr.ndim == 1 or (ctrl_arr.ndim == 2 and ctrl_arr.shape[1] == 1):
+
+                ctrl_sq = np.squeeze(ctrl_arr)
+                ctrl_sorted = np.sort(ctrl_sq)
+                grid_sq = np.squeeze(grid)
+                cdf = np.searchsorted(ctrl_sorted, grid_sq, side='right') / len(ctrl_sq)
+
+                u = (np.arange(k) + 0.5) / k
+                # Find the first index where cdf >= u
+                mask = cdf[None, :] >= u[:, None]
+                idx = np.argmax(mask, axis=1)
+            
+                # Handle cases where `u` might be strictly larger than the max available CDF value
+                missing = ~np.any(mask, axis=1)
+                idx[missing] = len(grid) - 1
+            
+                samples.append(grid[idx])
+            else:
+                indices = np.linspace(0, len(ctrl_arr) - 1, k).astype(int)
+                samples.append(ctrl_arr[indices])
+
+            
+
+        if len(samples) > 0:
+            disco_dist = np.concatenate(samples, axis=0)
+            # Zufälliges Mischen der stratifizerten Samples um Cluster-Bildung aufzuheben
+            np.random.shuffle(disco_dist)
+            return disco_dist
+        else:
+            return np.array([])
+    else:
+        return None

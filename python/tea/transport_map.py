@@ -21,24 +21,11 @@ class TransportMapTEA(BaseTEA):
             controls_data = p_res.controls.data
             weights = self.disco.weights if self.disco.weights is not None else np.ones(len(controls_data))/len(controls_data)
             
-            pool_data = []
-            pool_w = []
-            for c_data, w in zip(controls_data, weights):
-                c_data_arr = np.asarray(c_data)
-                if c_data_arr.ndim == 1:
-                    c_data_arr = c_data_arr.reshape(-1, 1)
-                if len(c_data_arr) > 0 and w > 1e-5:
-                    pool_data.append(c_data_arr)
-                    pool_w.extend([w / len(c_data_arr)] * len(c_data_arr))
+            from ..utils import sample_counterfactual_distribution
+            grid = p_res.target.grid
+            counterfactual_dist = sample_counterfactual_distribution(controls_data, weights, grid=grid, num_samples=N)
             
-            if len(pool_data) > 0:
-                pool_data = np.vstack(pool_data)
-                pool_w = np.array(pool_w)
-                pool_w_norm = pool_w / np.sum(pool_w)
-                np.random.seed(42 + self.t_mapper[t]) 
-                sample_idx = np.random.choice(len(pool_data), size=N, p=pool_w_norm)
-                counterfactual_dist = pool_data[sample_idx]
-            else:
+            if counterfactual_dist is None or len(counterfactual_dist) == 0:
                 counterfactual_dist = target_dist.copy()
 
             weights_target = np.ones(N) / N

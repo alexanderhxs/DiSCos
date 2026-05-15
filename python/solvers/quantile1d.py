@@ -1,6 +1,6 @@
 import numpy as np
 import cvxpy as cp
-from ..utils.utils import myQuant
+from ..utils import myQuant
 from .base import BaseSolver
 
 def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):
@@ -49,7 +49,13 @@ class Quantile1DSolver(BaseSolver):
         
     def evaluate_counterfactual(self,  controls, weights, **kwargs):
         grid_ord = kwargs.get("grid_ord")
-        controls_q = kwargs.get("controls_q", np.array([]))
+        controls_q = kwargs.get("controls_q", None)
+
+        if controls_q is None:
+            evgrid = kwargs.get("evgrid", np.linspace(0, 1, 1000))
+            controls_q = np.zeros((len(evgrid), len(controls)))
+            for jj, ctrl in enumerate(controls):
+                controls_q[:, jj] = myQuant(ctrl, evgrid)
 
         if len(controls_q) > 0 and weights is not None:
             disco_quantile = controls_q @ weights
@@ -66,9 +72,11 @@ class Quantile1DSolver(BaseSolver):
 
     def compute_distance(self, target, controls, weights, **kwargs):
         dist = 0
-        target_q = kwargs.get("target_q")
+        grid_ord = kwargs.get("grid_ord", np.linspace(0, 1, 1000))
+        target_q = kwargs.get("target_q", myQuant(target, grid_ord))
+        controls_q = kwargs.get("controls_q", myQuant(controls, grid_ord))
+
         if target_q is not None and weights is not None:
-            controls_q = kwargs.get("controls_q")
             bc_q = controls_q @ weights
             dist = np.mean((bc_q - target_q)**2)
         return dist

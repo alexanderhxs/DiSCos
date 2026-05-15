@@ -1,7 +1,6 @@
 import numpy as np
-from typing import Dict, List, Optional
-from ..models import PeriodResult, PreTreatmentFitMetrics, DiSCoResult
-from scipy.stats import wasserstein_distance, energy_distance, ks_2samp
+from ..models import  PreTreatmentFitMetrics, DiSCoResult
+from scipy.stats import ks_2samp
 import ot
 import scoringrules as sr
 
@@ -32,16 +31,13 @@ def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000) ->
         
         if len(target_data) > 0 and len(controls_data) > 0 and weights is not None:
             
+            # Sampling for both 1D and Multi-D to calculate metrics like cov_error and energy_divergence
+            target_dist = target_data[np.random.choice(len(target_data), size=eval_size)]
+            
+            from ..utils import sample_counterfactual_distribution
+            disco_dist = sample_counterfactual_distribution(controls_data, weights, grid=p_res.target.grid, num_samples=eval_size)
+            
             if disco_res.params.is_multivariate:
-                # Need to sample/pool for multi-D optimal transport (OT doesn't handle negative weights well)
-                target_dist = target_data[np.random.choice(len(target_data), size=eval_size)]
-                
-                w = np.clip(weights, 0, None) # clip for sampling in multi-D
-                w = w / w.sum() if w.sum() > 0 else np.ones(len(w)) / len(w)
-                
-                chosen_controls = np.random.choice(len(w), size=eval_size, p=w)
-                disco_dist = np.array([controls_data[c][np.random.choice(len(controls_data[c]))] for c in chosen_controls])
-                
                 def _compute_1d_metrics(t_1d, d_1d):
                     ks_val, _ = ks_2samp(t_1d, d_1d)
                     mean_df = np.abs(np.mean(t_1d) - np.mean(d_1d))
@@ -62,23 +58,28 @@ def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000) ->
                 a, b = np.ones(eval_size) / eval_size, np.ones(eval_size) / eval_size
                 M = ot.dist(target_dist, disco_dist, metric='euclidean')
                 w1 = float(ot.emd2(a, b, M))
-                energy_dist = float(np.mean(sr.energy_score(target_dist, disco_dist[:,None,:])))
+                energy_divergence = float(np.mean(sr.energy_score(target_dist, disco_dist[:,None,:])))
                 
             else:
-                # 1D Deterministic (Supports simplex=False)
+                # 1D Deterministic metrics (Supports simplex=False for these)
                 target_q = p_res.target.quantiles
                 disco_q = p_res.DiSCo.quantile
                 
                 w1 = float(np.mean(np.abs(target_q - disco_q)))
-                energy_dist = cov_error = np.nan
                 ks_stats = [float(np.max(np.abs(p_res.target.cdf - p_res.DiSCo.cdf)))]
                 mean_diffs = [float(np.abs(np.mean(target_q) - np.mean(disco_q)))]
+                
+                # 1D approximate metrics from samples
+                cov_t = np.var(target_dist)
+                cov_d = np.var(disco_dist)
+                cov_error = float(np.abs(cov_t - cov_d))
+                energy_divergence = float(np.mean(sr.energy_score(target_dist[:,None], disco_dist[:, None, None])))
         else:
-            w1, energy_dist, cov_error = np.nan, np.nan, np.nan
+            w1, energy_divergence, cov_error = np.nan, np.nan, np.nan
             ks_stats, mean_diffs = [np.nan], [np.nan]
             
         per_period_metrics[t] = {
-            "w1": float(w1), "energy_dist": float(energy_dist), 
+            "w1": float(w1), "energy_divergence": float(energy_divergence), 
             "ks_stat": ks_stats, "mean_diff": mean_diffs, 
             "cov_error": float(cov_error)
         }
@@ -87,7 +88,7 @@ def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000) ->
 
     return PreTreatmentFitMetrics(
         w1=per_period_metrics.get(t0_idx, {}).get("w1", np.nan),
-        energy_dist=per_period_metrics.get(t0_idx, {}).get("energy_dist", np.nan),
+        energy_divergence=per_period_metrics.get(t0_idx, {}).get("energy_divergence", np.nan),
         cov_error=per_period_metrics.get(t0_idx, {}).get("cov_error", np.nan),
         marginal_ks=[float(np.mean([per_period_metrics[t]["ks_stat"][dim] for t in per_period_metrics])) for dim in range(num_dims)],
         marginal_mean_diff=[float(np.mean([per_period_metrics[t]["mean_diff"][dim] for t in per_period_metrics])) for dim in range(num_dims)],
