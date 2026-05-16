@@ -83,9 +83,11 @@ class DiSCo:
         
     def _preprocess(self):
         np.random.seed(self.seed)
-        # Time normalization (1-indexed)
-        min_time = self.df[self.time_col].min()
-        self.df['t_col'] = self.df[self.time_col] - min_time + 1
+        # Time indication (1-indexed)
+        time_stamps = np.sort(self.df[self.time_col].unique())
+        time_stamps_to_idx = {t: i for i, t in enumerate(time_stamps, start=1)}
+        
+        self.df['t_col'] = self.df[self.time_col].map(time_stamps_to_idx)
         
         # Strict mapping to the exact t_col corresponding to t0, minus 1 just like in R's DiSCo.R
         t0_mapped = self.df[self.df[self.time_col] == self.t0]['t_col'].unique()

@@ -66,7 +66,7 @@ class TransportMapTEA(BaseTEA):
             H_cf = np.column_stack([df_cf['Combined_Bin'] == b for b in all_bins]).astype(float)
 
             T_aggregated = H_target.T @ T_samples @ H_cf
-            df_T_agg = pd.DataFrame(np.round(T_aggregated * 100, 2), index=all_bins, columns=all_bins)
+            df_T_agg = pd.DataFrame(np.round(T_aggregated * 100, 4), index=all_bins, columns=all_bins)
             
             treats[self.t_mapper[t]] = df_T_agg
 
