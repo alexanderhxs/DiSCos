@@ -23,7 +23,7 @@ def disco_mixture(controls, target, grid_min, grid_max, grid_ord, M, simplex):
             cdf_matrix[:, i+1] = np.mean(np.all(ctrl[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
     
     w = cp.Variable(num_controls)
-    obj = cp.Minimize(cp.norm1(cdf_matrix[:, 1:] @ w - cdf_matrix[:, 0]))
+    obj = cp.Minimize(cp.norm1(cdf_matrix[:, 1:] @ w - cdf_matrix[:, 0]))   #Use quadratic norm: better theoretic properties
     
     if simplex:
         constraints = [w >= 0, cp.sum(w) == 1]

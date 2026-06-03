@@ -21,9 +21,21 @@ def radon_transform(target: np.array,
         dict: Enthält 'projected_data' (N, L) und 'directions' (d, L).
     """
     # 1. Daten extrahieren und aneinander hängen
-    data_np = np.concatenate([target] + controls, axis=0)  # Shape: (N, d)
+    if hasattr(target, "shape") and len(target) > 0:
+        d = target.shape[1]
+    elif len(controls) > 0 and hasattr(controls[0], "shape") and len(controls[0]) > 0:
+        d = controls[0].shape[1]
+    else:
+        raise ValueError("Target and controls are empty or malformed.")
+
+    valid_controls = [c for c in controls if len(c) > 0]
+    data_list = [target] + valid_controls if len(target) > 0 else valid_controls
     
-    N, d = data_np.shape
+    if len(data_list) == 0:
+        return {'projected_data': np.array([]), 'directions': np.array([])}
+        
+    data_np = np.concatenate(data_list, axis=0)  # Shape: (N, d)
+    N = data_np.shape[0]
     L = n_slices
     
     # 2. Richtungen bestimmen

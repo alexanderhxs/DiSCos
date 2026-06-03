@@ -6,35 +6,49 @@ from .base import BaseSolver
 class EnergySolver(BaseSolver):
     def fit_weights(self, target, controls, **kwargs):
         """
-        target: numpy array der Form (n, d) - n Samples, d Dimensionen
-        controls: Liste von arrays oder array der Form (J, n, d) - J Modelle
+        target: numpy array der Form (n_t, d) - n_t Samples, d Dimensionen pro Periode
+        controls: Liste der Länge J, wobei Element controls[j] ein Array der Form (n_j, d) ist
         """
-        # Sicherstellen, dass controls ein 3D-Array der Form (J, n, d) ist
-        if isinstance(controls, list):
-            controls = np.array(controls)
-            
-        J, n, d = controls.shape
-        
-        # Um target von (n, d) von jedem Modell in (J, n, d) abziehen zu können,
-        # fügen wir eine Dimension für Broadcasting hinzu -> (1, n, d)
-        target_expanded = np.expand_dims(target, axis=0)
-        
-        # ---------------------------------------------------------
-        # 1. Lineare Distanz zur Wahrheit (Vektor A) berechnen
-        # ---------------------------------------------------------
-        # Euklidische Distanz über die Feature-Dimension (axis=-1)
-        err_norm = np.linalg.norm(controls - target_expanded, axis=-1)  # Shape: (J, n)
-        # Durchschnitt über alle n Samples (Zeitpunkte/Beobachtungen)
-        A = np.mean(err_norm, axis=-1)  # Shape: (J,)
-        
-        # ---------------------------------------------------------
-        # 2. Streuung der Modelle untereinander (Matrix D) berechnen
-        # ---------------------------------------------------------
-        # Cross-Differences durch Broadcasting erzeugen -> Shape: (J, J, n, d)
-        spread_diff = np.expand_dims(controls, axis=1) - np.expand_dims(controls, axis=0)
-        spread_norm = np.linalg.norm(spread_diff, axis=-1)  # Shape: (J, J, n)
-        # Durchschnitt über alle n Samples
-        D = np.mean(spread_norm, axis=-1)  # Shape: (J, J)
+        J = len(controls) # J: Anzahl der Kontroll-Einheiten
+        target = np.asarray(target)
+        if target.size > 0 and target.ndim == 1:
+            target = target[:, None] # target wird zu Shape (n_t, 1) falls 1D
+        n_t = target.shape[0] if target.size > 0 else 0 # n_t: Anzahl Observations im Target
+        d = target.shape[1] if target.size > 0 else 1   # d: Dimension des Features
+
+        A = np.zeros(J) # Shape: (J,) - Energy dist Target -> jede Control
+        D = np.zeros((J, J)) # Shape: (J, J) - Energy dist Controls untereinander
+        valid_mask = np.ones(J, dtype=bool) # Shape: (J,)
+
+        proc_controls = [] # Liste (Länge J) von validen Control-Arrays (Shape: (n_j, d))
+        for j in range(J):
+            c = np.asarray(controls[j])
+            if c.size == 0:
+                valid_mask[j] = False
+                proc_controls.append(np.empty((0, d)))
+            else:
+                if c.ndim == 1:
+                    c = c[:, None]
+                proc_controls.append(c)
+
+        for j in range(J):
+            if not valid_mask[j]:
+                continue
+            c_j = proc_controls[j] # Shape: (n_j, d)
+            if n_t > 0:
+                # Broadcasting von c_j (n_j, 1, d) und target (1, n_t, d) -> diff Shape: (n_j, n_t, d)
+                diff = c_j[:, None, :] - target[None, :, :]
+                A[j] = np.mean(np.linalg.norm(diff, axis=-1)) # A[j] ist ein Skalar
+
+            for k in range(j, J):
+                if not valid_mask[k]:
+                    continue
+                c_k = proc_controls[k] # Shape: (n_k, d)
+                # Broadcasting von c_j (n_j, 1, d) und c_k (1, n_k, d) -> diff Shape: (n_j, n_k, d)
+                diff = c_j[:, None, :] - c_k[None, :, :]
+                val = np.mean(np.linalg.norm(diff, axis=-1)) # val ist ein Skalar
+                D[j, k] = val
+                D[k, j] = val
         
         # ---------------------------------------------------------
         # 3. Der CVXPY PSD-Trick (Positive Semi-Definite)
@@ -67,10 +81,14 @@ class EnergySolver(BaseSolver):
         w = cp.Variable(J, nonneg=simplex)  
         
         # Zielfunktion: Linearer Term + Quadratischer Term
-        objective = cp.Minimize(A @ w + cp.quad_form(w, H_psd))
+        # Verwende cp.psd_wrap, um numerische Ungenauigkeiten bei der PSD-Prüfung von CVXPY zu umgehen
+        objective = cp.Minimize(A @ w + cp.quad_form(w, cp.psd_wrap(H_psd)))
         
         # Nebenbedingungen (Constraints)    
         constraints = [cp.sum(w) == 1]
+        for j in range(J):
+            if not valid_mask[j]:
+                constraints.append(w[j] == 0)
 
         prob = cp.Problem(objective, constraints)
         
@@ -104,10 +122,11 @@ class EnergySolver(BaseSolver):
         evgrid = kwargs.get("evgrid")
 
         from ..utils import sample_counterfactual_distribution
+        # counterfactual: Array mit resampelten/gepoolten Werten, typisches Shape (N_pool, d)
         counterfactual = sample_counterfactual_distribution(controls, weights, grid_ord)
         
         if counterfactual is not None and grid_ord is not None:
-            cf_sq = np.squeeze(counterfactual)
+            cf_sq = np.squeeze(counterfactual) # Squeezed Array, z.B. Shape (N_pool,) falls d=1 oder (N_pool, d) falls d>1
             
             if cf_sq.ndim == 1:
                 cf_sorted = np.sort(cf_sq)
@@ -130,43 +149,70 @@ class EnergySolver(BaseSolver):
         }
         
     def compute_distance(self, target, controls, weights, **kwargs):
+        """
+        target: array mit Shape (n_t, d)
+        controls: Liste der Länge J, Elemente haben Shape (n_j, d)
+        weights: array mit Shape (J,)
+        """
         if weights is None or len(weights) == 0:
             return np.nan
-            
-        if isinstance(controls, list):
-            # Filtern von leeren Controls
-            valid_controls = [c for c in controls if len(c) > 0]
-            if len(valid_controls) == 0:
-                return np.nan
-            valid_idx = [i for i, c in enumerate(controls) if len(c) > 0]
-            if len(valid_idx) < len(weights):
-                weights = weights[valid_idx] / np.sum(weights[valid_idx])
-            controls = np.array(valid_controls)
-            
-        if target is None or len(target) == 0:
-            return np.nan
-            
+        
         target = np.asarray(target)
+        if target.size == 0:
+            return np.nan
         if target.ndim == 1:
-            target = target[:, None]
-        if controls.ndim == 2:
-            controls = controls[:, :, None]
+            target = target[:, None] # target Shape: (n_t, 1)
+        n_t = target.shape[0] # n_t: Anzahl Target Observations
+        d = target.shape[1]   # d: Feature-Dimensionen
+        
+        J = len(controls) # J: Anzahl Kontrollgruppen
+        valid_mask = np.ones(J, dtype=bool) # Shape: (J,)
+        proc_controls = [] # Liste (Länge J), Elemente Shape: (n_j, d)
+        
+        for j in range(J):
+            c = np.asarray(controls[j])
+            if c.size == 0:
+                valid_mask[j] = False
+                proc_controls.append(np.empty((0, d)))
+            else:
+                if c.ndim == 1:
+                    c = c[:, None]
+                proc_controls.append(c)
 
-        # ---------------------------------------------------------
-        # Energy Distance mittels der Vektoren und Matrizen aus fit_weights interpolieren
-        # ED = E|X_c - X_t| - 0.5 * E|X_c - X_c'| - 0.5 * E|X_t - X_t'|
-        # ---------------------------------------------------------
-        target_expanded = np.expand_dims(target, axis=0)
-        err_norm = np.linalg.norm(controls - target_expanded, axis=-1)
-        A = np.mean(err_norm, axis=-1)
+        if not np.any(valid_mask):
+            return np.nan
+
+        # Adjust weights for missing out-of-sample controls
+        weights = np.array(weights, dtype=float)
+        if not np.all(valid_mask):
+            valid_w_sum = np.sum(weights[valid_mask])
+            if valid_w_sum > 0:
+                weights[~valid_mask] = 0.0
+                weights /= valid_w_sum
+            else:
+                return np.nan
+
+        A = np.zeros(J)
+        D = np.zeros((J, J))
+
+        for j in range(J):
+            if not valid_mask[j] or weights[j] == 0:
+                continue
+            c_j = proc_controls[j]
+            diff = c_j[:, None, :] - target[None, :, :]
+            A[j] = np.mean(np.linalg.norm(diff, axis=-1))
+
+            for k in range(j, J):
+                if not valid_mask[k] or weights[k] == 0:
+                    continue
+                c_k = proc_controls[k]
+                diff = c_j[:, None, :] - c_k[None, :, :]
+                val = np.mean(np.linalg.norm(diff, axis=-1))
+                D[j, k] = val
+                D[k, j] = val
         
-        spread_diff = np.expand_dims(controls, axis=1) - np.expand_dims(controls, axis=0)
-        spread_norm = np.linalg.norm(spread_diff, axis=-1)
-        D = np.mean(spread_norm, axis=-1)
-        
-        target_diff = np.expand_dims(target, axis=1) - np.expand_dims(target, axis=0)
-        target_norm = np.linalg.norm(target_diff, axis=-1)
-        target_spread = np.mean(target_norm)
+        target_diff = target[:, None, :] - target[None, :, :]
+        target_spread = np.mean(np.linalg.norm(target_diff, axis=-1))
         
         energy_dist = (A @ weights) - 0.5 * (weights.T @ D @ weights) - 0.5 * target_spread
         return float(energy_dist)
