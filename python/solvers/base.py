@@ -6,6 +6,10 @@ class BaseSolver(ABC):
     def fit_weights(self, target, controls, **kwargs):
         """Fit empirical distributions to find optimal synthetic weights."""   
         pass
+
+    def fit_weights_joint(self, target, controls, **kwargs):
+        """Fit empirical distributions to find optimal synthetic weights across multiple periods."""   
+        pass
         
     @abstractmethod
     def evaluate_counterfactual(self, controls, weights, **kwargs):     

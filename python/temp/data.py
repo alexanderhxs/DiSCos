@@ -125,3 +125,100 @@ def get_discrete_data(sample_size, num_controls, dist_control=3, dist_target=4):
         data.extend([{'id_col': str(i+1), 'time_col': 9999, 'y_col': y} for y in c_post])
 
     return pd.DataFrame(data)
+
+
+def generate_dynamic_panel_data(
+    num_periods=10, 
+    sample_size=1000, 
+    num_controls=25, 
+    dim=2, 
+    num_components=3, 
+    ar_coef=0.7, 
+    seed=None
+):
+    """
+    Generiert multivariate Panel-Daten basierend auf einem interaktiven Faktormodell.
+    Das Target-Profil wird unabhängig von den Kontrollen generiert.
+    """
+    if seed is not None:
+        np.random.seed(seed)
+        
+    # ---------------------------------------------------------
+    # 1. Globale Zeitdynamik (AR(1) Prozess für latente Faktoren)
+    # ---------------------------------------------------------
+    # f_t hat die Form (num_periods, dim)
+    f_t = np.zeros((num_periods, dim))
+    f_t[0] = np.random.normal(0, 1, dim)
+    for t in range(1, num_periods):
+        f_t[t] = ar_coef * f_t[t-1] + np.random.normal(0, 1, dim)
+        
+    # ---------------------------------------------------------
+    # 2. Profile generieren (Controls UND Target unabhängig)
+    # ---------------------------------------------------------
+    # Basis-Zentren für jede Kontrolle, jede Komponente, jede Dimension
+    mu_c = np.random.uniform(-5, 5, (num_controls, num_components, dim))
+    # Loadings (Sensibilität auf Schocks) für jede Kontrolle
+    lambda_c = np.random.uniform(-2, 2, (num_controls, dim))
+    
+    # Target-Profil völlig unabhängig ziehen
+    mu_t = np.random.uniform(-5, 5, (num_components, dim))
+    lambda_t = np.random.uniform(-2, 2, dim)
+    
+    # Kovarianzmatrizen generieren (geteilt über alle Units pro Komponente)
+    covs = np.zeros((num_components, dim, dim))
+    for k in range(num_components):
+        # Generiere eine strikt positiv definite Matrix
+        A = np.random.randn(dim, dim)
+        covs[k] = A @ A.T + np.eye(dim) * 0.5 
+        
+    # ---------------------------------------------------------
+    # 3. Hilfsfunktion zum Ziehen der Samples (GMM)
+    # ---------------------------------------------------------
+    def draw_gmm_samples(n, means, cov_matrices):
+        # Gleichverteilte Zuweisung zu den Mixture-Komponenten
+        comp_choices = np.random.choice(num_components, size=n)
+        out = np.zeros((n, dim))
+        for k in range(num_components):
+            mask = (comp_choices == k)
+            n_k = mask.sum()
+            if n_k > 0:
+                out[mask] = np.random.multivariate_normal(means[k], cov_matrices[k], size=n_k)
+        return out
+
+    # ---------------------------------------------------------
+    # 4. Simulation Loop über Zeit und Einheiten
+    # ---------------------------------------------------------
+    data = []
+    
+    for t in range(num_periods):
+        current_factor = f_t[t]
+        
+        # Target in Periode t
+        # mu_{target, t} = mu_{target} + lambda_{target} * f_t
+        mu_t_current = mu_t + (lambda_t * current_factor)[None, :]
+        samples_t = draw_gmm_samples(sample_size, mu_t_current, covs)
+        
+        for y in samples_t:
+            row = {'id_col': '0', 'time_col': t}
+            if dim == 1:
+                row['y_col'] = y[0]
+            else:
+                for d in range(dim):
+                    row[f'y_col_{d+1}'] = y[d]
+            data.append(row)
+            
+        # Controls in Periode t
+        for j in range(num_controls):
+            mu_c_current = mu_c[j] + (lambda_c[j] * current_factor)[None, :]
+            samples_c = draw_gmm_samples(sample_size, mu_c_current, covs)
+            
+            for y in samples_c:
+                row = {'id_col': str(j+1), 'time_col': t}
+                if dim == 1:
+                    row['y_col'] = y[0]
+                else:
+                    for d in range(dim):
+                        row[f'y_col_{d+1}'] = y[d]
+                data.append(row)
+
+    return pd.DataFrame(data)

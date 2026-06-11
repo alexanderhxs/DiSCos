@@ -117,6 +117,7 @@ def disco_tea(
     from .transport_map import TransportMapTEA
     from .density_ratio import DensityRatioTEA
     from .multivariate import MultivariateTEA
+    from .transport_map_exact import TransportMapTEA2
 
     if agg in ["wasserstein_dist"]:
         strategy = MultivariateTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
@@ -125,7 +126,7 @@ def disco_tea(
     elif agg == "density_ratio":
         strategy = DensityRatioTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
     elif agg == "transport_map":
-        strategy = TransportMapTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = TransportMapTEA2(disco, agg, graph, t_plot, xlim, ylim, samples)
     elif agg == "marginals":
         strategy = MarginalTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
     else:

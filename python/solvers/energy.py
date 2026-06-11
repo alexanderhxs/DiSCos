@@ -216,3 +216,116 @@ class EnergySolver(BaseSolver):
         
         energy_dist = (A @ weights) - 0.5 * (weights.T @ D @ weights) - 0.5 * target_spread
         return float(energy_dist)
+    
+
+    def fit_weights_joint(self, targets_list, controls_list, **kwargs):
+        T0 = len(targets_list)
+        # Wir gehen davon aus, dass die Anzahl der Kontroll-Einheiten J über die Zeit konstant ist
+        J = len(controls_list) 
+        
+        A_total = np.zeros(J)
+        D_total = np.zeros((J, J))
+        
+        # 1. & 2. Loss-Komponenten aggregieren
+        for t in range(T0):
+            target_t = np.asarray(targets_list[t])
+            controls_t = [controls_list[j][t] for j in range(J)] 
+            
+            if target_t.size > 0 and target_t.ndim == 1:
+                target_t = target_t[:, None]
+            
+            n_t = target_t.shape[0] if target_t.size > 0 else 0
+            d = target_t.shape[1] if target_t.size > 0 else 1
+            
+            A_t = np.zeros(J)
+            D_t = np.zeros((J, J))
+            valid_mask = np.ones(J, dtype=bool)
+            
+            proc_controls = []
+            for j in range(J):
+                c = np.asarray(controls_t[j])
+                # Hier wird die variable Länge n_{j,t} verarbeitet!
+                if c.size == 0:
+                    valid_mask[j] = False
+                    proc_controls.append(np.empty((0, d)))
+                else:
+                    if c.ndim == 1:
+                        c = c[:, None]
+                    proc_controls.append(c)
+                    
+            for j in range(J):
+                if not valid_mask[j]: continue
+                c_j = proc_controls[j] # Shape: (n_{j,t}, d)
+                
+                if n_t > 0:
+                    # Broadcasting funktioniert unabhängig von unterschiedlichen n_t und n_{j,t}
+                    diff = c_j[:, None, :] - target_t[None, :, :]
+                    A_t[j] = np.mean(np.linalg.norm(diff, axis=-1))
+                
+                for k in range(j, J):
+                    if not valid_mask[k]: continue
+                    c_k = proc_controls[k] # Shape: (n_{k,t}, d)
+                    
+                    # Broadcasting funktioniert auch hier, selbst wenn n_{j,t} != n_{k,t}
+                    diff = c_j[:, None, :] - c_k[None, :, :]
+                    val = np.mean(np.linalg.norm(diff, axis=-1))
+                    D_t[j, k] = val
+                    D_t[k, j] = val
+                    
+            # Aggregation über die Zeit
+            A_total += A_t
+            D_total += D_t
+            
+        # ---------------------------------------------------------
+        # 3. Der CVXPY PSD-Trick mit aggregierten Matrizen
+        # ---------------------------------------------------------
+        H = -0.5 * D_total
+        eigenvalues = np.linalg.eigvalsh(H)
+        min_eig = np.min(eigenvalues)
+        
+        if min_eig < 0:
+            gamma = -min_eig + 1e-6 
+            H_psd = H + gamma * np.ones((J, J))
+        else:
+            H_psd = H
+            
+        scaling_factor = np.max(np.abs(H_psd)) if np.max(np.abs(H_psd)) > 0 else 1.0
+        H_psd /= scaling_factor
+        A_total /= scaling_factor
+        
+        # ---------------------------------------------------------
+        # 4. CVXPY Optimierung
+        # ---------------------------------------------------------
+        import cvxpy as cp # Nur zur Sicherheit, falls oben im Skript noch nicht importiert
+        
+        simplex = kwargs.get("simplex", True) 
+        w = cp.Variable(J, nonneg=simplex)  
+        
+        objective = cp.Minimize(A_total @ w + cp.quad_form(w, cp.psd_wrap(H_psd)))
+        
+        constraints = [cp.sum(w) == 1]
+        
+        # Falls Einheiten komplett fehlen (über alle t), zwingen wir das Gewicht auf 0
+        for j in range(J):
+            if np.all(D_total[j, :] == 0) and A_total[j] == 0: 
+                constraints.append(w[j] == 0)
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=cp.OSQP, max_iter=10000)
+        
+        if prob.status not in ["optimal", "optimal_inaccurate"]:
+            prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
+            
+        weights_opt = w.value
+        
+        # ---------------------------------------------------------
+        # 5. Clean-up
+        # ---------------------------------------------------------
+        if weights_opt is None:
+            weights_opt = np.ones(J) / J
+            
+        if simplex:
+            weights_opt = np.clip(weights_opt, 0, 1)
+            weights_opt /= np.sum(weights_opt) 
+            
+        return weights_opt

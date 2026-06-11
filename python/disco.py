@@ -11,8 +11,8 @@ from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, T
 
 class DiSCo:
     def __init__(self, df, id_col, time_col, y_col, id_col_target, t0, 
-                 M=1000, G=100, num_cores=-1, q_min=0.0, q_max=1.0, CI= False, uniform=False, perm=False, cl=0.95, B=100,
-                 mixture=False, simplex=False, seed=None, **kwargs):
+                 M=1000, G=100, num_cores=1, q_min=0.0, q_max=1.0, CI= False, uniform=False, perm=False, cl=0.95, B=100,
+                 mixture=False, simplex=False, seed=None, joint_opt=False, **kwargs):
         """
         Distributional Synthetic Controls
         
@@ -43,6 +43,7 @@ class DiSCo:
         self.q_max = q_max
         self.mixture = mixture
         self.simplex = simplex
+        self.joint_opt = joint_opt
         
         if isinstance(self.y_col, (list, tuple)) or len(df[self.y_col].shape) > 1:
             self.is_multivariate = True
@@ -53,7 +54,7 @@ class DiSCo:
         method = kwargs.get("method")
         
         if method == "tangential":
-            self.solver = TangentialWassersteinSolver(method=kwargs.get("ot_method", "emd"))
+            self.solver = TangentialWassersteinSolver()
         elif method == "sliced":
             self.solver = SlicedWassersteinSolver(n_slices=kwargs.get("n_slices", 1000))
         elif method == "mixture":
@@ -216,21 +217,63 @@ class DiSCo:
         )
 
         return {'t': t, 'period_result': period_result}
+    
+    def _iter_joint(self):
+        pre_treatment_periods = [pt for pt in self.periods if pt <= self.T0_idx]
+        target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values 
+                       for pt in pre_treatment_periods]
+        controls_data = []
+        for cid in self.controls_id:
+            c_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.y_col].values for pt in pre_treatment_periods]
+            controls_data.append(c_data)
+
+        weights = self.solver.fit_weights_joint(
+            targets_list=target_data, 
+            controls_list=controls_data, 
+            #grid_min=grid_min, 
+            #grid_max=grid_max, 
+            #grid_ord=grid_ord, 
+            #M=self.M, 
+            simplex=self.simplex,
+            q_min=0, q_max=1
+        )
+
+        results_by_period = {
+            t: PeriodResult(
+                DiSCo=DiSCoMethodResult(weights=weights),
+                target=TargetData(
+                    cdf=None,
+                    grid=None,
+                    data=self.df.loc[(self.df['t_col'] == t) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values,
+                ),
+                controls=ControlsData(
+                    cdf=None,
+                    data=self.df.loc[(self.df['t_col'] == t) & (self.df[self.id_col].isin(self.controls_id))].groupby(self.id_col)[self.y_col].apply(np.array).tolist(),
+                    quantiles=None
+                )
+            )
+        for t in self.periods}
+
+        return results_by_period
+
 
     def fit(self) -> DiSCoResult:
         """
         Run the complete DiSCo estimation across all periods in parallel.
         """
-        results = Parallel(n_jobs=self.num_cores)(
-            delayed(self._iter_period)(t) for t in self.periods
-        )
+        if not self.joint_opt:
+            results = Parallel(n_jobs=self.num_cores)(
+                delayed(self._iter_period)(t) for t in self.periods
+            )
+            results = [r for r in results if r is not None]
         
-        results = [r for r in results if r is not None]
-        
-        if not results:
-            raise ValueError("No valid periods data found.")
+            if not results:
+                raise ValueError("No valid periods data found.")
             
-        self.results_by_period = {r['t']: r['period_result'] for r in results}
+            self.results_by_period = {r['t']: r['period_result'] for r in results}
+        else:
+            self.results_by_period = self._iter_joint()
+            
         
         # Average pre-treatment weights
         pre_treat_weights = []
