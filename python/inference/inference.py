@@ -1,11 +1,19 @@
 import numpy as np
 from joblib import Parallel, delayed
-from ..solvers import disco_weights_reg, disco_mixture
-from ..utils import getGrid, myQuant
-from ..models import CIResult, CIBand, CIWeights, CIBootmat
+from utils import getGrid, myQuant
+from models import CIResult, CIBand, CIWeights, CIBootmat
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 def disco_ci_iter(t, controls_t, target_t, grid_t, T0, solver, is_multivariate, M=1000,
-                  evgrid=np.linspace(0, 1, 1001), simplex=False, replace=True):
+                   simplex=False, replace=True):
     """
     Performs a single bootstrap redraw for a single time period `t`.
     """
@@ -16,7 +24,7 @@ def disco_ci_iter(t, controls_t, target_t, grid_t, T0, solver, is_multivariate, 
     # --- RESAMPLE CONTROLS STATS ---
     mycon_list = []
 
-    for ii, controls_t_i in enumerate(controls_t):
+    for controls_t_i in controls_t:
         c_len = len(controls_t_i)
 
         # Resample each control unit drawing `c_len` observations with replacement
@@ -112,7 +120,7 @@ def disco_ci(redraw, controls, target, T_max, T0, grids, evgrid,
     for t in range(T_max):
         result_t = disco_ci_iter(
             t + 1, controls[t], target[t], grids[t], T0, solver=solver, is_multivariate=is_multivariate,
-            M=M, evgrid=evgrid, simplex=simplex, replace=replace
+            M=M, simplex=simplex, replace=replace
         )
         boots_periods.append(result_t)
 
@@ -124,6 +132,8 @@ def disco_ci(redraw, controls, target, T_max, T0, grids, evgrid,
     for t in range(T_max):
         cf = boot_counterfactuals(boots_periods[t], t + 1, solver, weights, evgrid, is_multivariate)
         disco_boot.append(cf)
+    
+    logger.info("Completed bootstrap iteration %s", redraw + 1)
         
     return {
         "weights": weights,

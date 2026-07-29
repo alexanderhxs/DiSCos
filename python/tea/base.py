@@ -110,7 +110,8 @@ def disco_tea(
     t_plot: Optional[List[int]] = None,
     xlim=None,
     ylim=None,
-    samples=[0.25, 0.5, 0.75]
+    samples=[0.25, 0.5, 0.75],
+    **kwargs
 ):
     from .classic import ClassicTEA
     from .marginals import MarginalTEA
@@ -118,17 +119,23 @@ def disco_tea(
     from .density_ratio import DensityRatioTEA
     from .multivariate import MultivariateTEA
     from .transport_map_exact import TransportMapTEA2
+    from .simple import SimpleTEA
+    from .prob_mass import ProbMassTEA
 
     if agg in ["wasserstein_dist"]:
-        strategy = MultivariateTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = MultivariateTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
     elif agg in ["cdfDiff", "cdf", "quantileDiff", "quantile"]:
-        strategy = ClassicTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = ClassicTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
     elif agg == "density_ratio":
-        strategy = DensityRatioTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = DensityRatioTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
     elif agg == "transport_map":
-        strategy = TransportMapTEA2(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = TransportMapTEA2(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
     elif agg == "marginals":
-        strategy = MarginalTEA(disco, agg, graph, t_plot, xlim, ylim, samples)
+        strategy = MarginalTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
+    elif agg == "simple":
+        strategy = SimpleTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
+    elif agg == "prob_mass":
+        strategy = ProbMassTEA(disco, agg, graph, t_plot, xlim, ylim, samples, **kwargs)
     else:
         raise ValueError(f"Unknown aggregation method: {agg}")
     

@@ -4,3 +4,5 @@ from .marginals import MarginalTEA
 from .transport_map import TransportMapTEA
 from .density_ratio import DensityRatioTEA
 from .multivariate import MultivariateTEA
+from .simple import SimpleTEA
+from .prob_mass import ProbMassTEA

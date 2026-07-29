@@ -1,6 +1,6 @@
 import numpy as np
 import cvxpy as cp
-from ..utils import myQuant
+from utils import myQuant
 from .base import BaseSolver
 
 def disco_weights_reg(controls, target, M=500, simplex=False, q_min=0, q_max=1):

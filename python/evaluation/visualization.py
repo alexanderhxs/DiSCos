@@ -459,3 +459,99 @@ def plot_fit_scatter2d(fit_synth, period=None):
     
     plt.tight_layout()
     plt.show()
+
+
+def plot_transport_comparison(gt_effect, tea_result, period=5, save_path=None):
+    """
+    Plots a side-by-side comparison of the Ground Truth (GT) transport map and 
+    the estimated transport map, along with their difference and a scatter comparison.
+    
+    Parameters:
+    -----------
+    gt_effect : dict
+        The result of calculate_ground_truth_effect(...).
+    tea_result : DiSCoTEAResult
+        The TEA result object containing estimated transport maps.
+    period : int
+        The period for which to plot the comparison (default is 5).
+    save_path : str, optional
+        Path to save the resulting figure.
+    """
+    import seaborn as sns
+
+    if period not in gt_effect:
+        raise ValueError(f"Period {period} not found in gt_effect keys: {list(gt_effect.keys())}")
+    
+    if period not in tea_result.treats['Estimate']:
+        raise ValueError(f"Period {period} not found in tea_result.treats['Estimate'] keys: {list(tea_result.treats['Estimate'].keys())}")
+        
+    gt_map = gt_effect[period]['transport_map']
+    est_map = tea_result.treats['Estimate'][period]
+    
+    # Create grid of subplots: 2 top (GT, Estimate), 2 bottom (Difference, Scatter)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+    
+    # 1. Ground Truth Heatmap
+    max_val = max(gt_map.max().max(), est_map.max().max())
+    sns.heatmap(gt_map, ax=axes[0, 0], cmap='Blues', vmin=0, vmax=max_val, 
+                cbar_kws={'label': 'Transport Mass (%)'}, square=True)
+    axes[0, 0].set_title(f'Ground Truth Transport Map (Period {period})', fontsize=14, fontweight='bold', pad=10)
+    axes[0, 0].set_xlabel('Target Bins', fontsize=12)
+    axes[0, 0].set_ylabel('Source Bins', fontsize=12)
+    
+    # 2. Estimate Heatmap
+    sns.heatmap(est_map, ax=axes[0, 1], cmap='Blues', vmin=0, vmax=max_val, 
+                cbar_kws={'label': 'Transport Mass (%)'}, square=True)
+    axes[0, 1].set_title(f'Estimated Transport Map (Period {period})', fontsize=14, fontweight='bold', pad=10)
+    axes[0, 1].set_xlabel('Target Bins', fontsize=12)
+    axes[0, 1].set_ylabel('Source Bins', fontsize=12)
+    
+    # 3. Difference Heatmap
+    diff_map = est_map - gt_map
+    max_diff = np.max(np.abs(diff_map.values))
+    vmin_diff, vmax_diff = (-max_diff, max_diff) if max_diff > 1e-8 else (-1, 1)
+    
+    sns.heatmap(diff_map, ax=axes[1, 0], cmap='RdBu_r', center=0, vmin=vmin_diff, vmax=vmax_diff, 
+                cbar_kws={'label': 'Difference (Estimate - GT) %'}, square=True)
+    axes[1, 0].set_title('Difference Map (Estimate - Ground Truth)', fontsize=14, fontweight='bold', pad=10)
+    axes[1, 0].set_xlabel('Target Bins', fontsize=12)
+    axes[1, 0].set_ylabel('Source Bins', fontsize=12)
+    
+    # 4. Scatter Plot of coupling values
+    gt_flat = gt_map.values.flatten()
+    est_flat = est_map.values.flatten()
+    
+    axes[1, 1].scatter(gt_flat, est_flat, alpha=0.6, color='#1f77b4', edgecolors='k', s=50, label='Coupling Cells')
+    
+    max_limit = max(gt_flat.max(), est_flat.max())
+    axes[1, 1].plot([0, max_limit], [0, max_limit], 'r--', linewidth=2, label='Perfect Agreement (y = x)')
+    
+    # Calculate performance metrics
+    mae = np.mean(np.abs(gt_flat - est_flat))
+    rmse = np.sqrt(np.mean((gt_flat - est_flat)**2))
+    corr = np.corrcoef(gt_flat, est_flat)[0, 1] if len(np.unique(gt_flat)) > 1 and len(np.unique(est_flat)) > 1 else np.nan
+    
+    axes[1, 1].text(0.05 * max_limit, 0.85 * max_limit, 
+                    f'MAE: {mae:.3f}%\nRMSE: {rmse:.3f}%\nCorr: {corr:.4f}', 
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8), fontsize=12)
+    
+    axes[1, 1].set_title('Scatter Comparison of Coupling Values', fontsize=14, fontweight='bold', pad=10)
+    axes[1, 1].set_xlabel('Ground Truth Transport Mass (%)', fontsize=12)
+    axes[1, 1].set_ylabel('Estimated Transport Mass (%)', fontsize=12)
+    axes[1, 1].set_xlim(-0.5, max_limit + 1)
+    axes[1, 1].set_ylim(-0.5, max_limit + 1)
+    axes[1, 1].legend(loc='lower right', fontsize=12)
+    axes[1, 1].grid(True, linestyle='--', alpha=0.5)
+    
+    # Remove top/right borders for a cleaner look
+    axes[1, 1].spines['top'].set_visible(False)
+    axes[1, 1].spines['right'].set_visible(False)
+        
+    plt.suptitle(f'Visual Transport Coupling Comparison (Period {period})', fontsize=18, fontweight='bold', y=0.98)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Figure saved to {save_path}")
+        
+    plt.show()

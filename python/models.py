@@ -113,6 +113,7 @@ class DiSCoParams:
 @dataclass
 class PreTreatmentFitMetrics:
     w1: float
+    w2: float
     energy_divergence: float
     cov_error: float
     marginal_ks: List[float]

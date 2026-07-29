@@ -1,10 +1,17 @@
 import numpy as np
-import pandas as pd
 from joblib import Parallel, delayed
 import logging
-from ..solvers import disco_weights_reg, disco_mixture
-from ..models import PermutResult
-from ..utils import myQuant, getGrid
+from models import PermutResult
+from utils import getGrid
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 def run_permutation_test(disco_instance, peridx=None):
     """
@@ -111,14 +118,14 @@ def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, 
             )
             lambda_tp.append(res)
         else:
-            print(f"Skipping period {t} for permutation {idx} due to insufficient data or post-treatment period.")
+            logger.info(f"Skipping period {t} for permutation {idx} due to insufficient data or post-treatment period.")
             lambda_tp.append(np.ones(len(controls_data)) / len(controls_data))
 
     # Average optimal lambda
     lambda_opt = np.mean(lambda_tp, axis=0)
     dist = np.zeros(len(periods))
     # Calculate counterfactual and distance for post treatment periods
-    for idx, t in enumerate(periods):
+    for i, t in enumerate(periods):
         target_data = np.asarray(pert[t])
         controls_data = [np.asarray(c) for c in perc[t][1:]]
         
@@ -126,14 +133,16 @@ def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, 
             G_grid = len(results_by_period[t].target.grid) - 1
             _, _, grid_ord_perm = getGrid(target_data, controls_data, G_grid)
             
-            dist[idx] = solver.compute_distance(
+            dist[i] = solver.compute_distance(
                 target=target_data,
                 controls=controls_data,
                 weights=lambda_opt,
                 grid_ord=grid_ord_perm,
             )
         else:
-            dist[idx] = np.nan
+            dist[i] = np.nan
+
+    logger.info(f"Computed distances for permutation {idx}")
         
     return dist
 

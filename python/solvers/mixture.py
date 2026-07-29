@@ -1,6 +1,7 @@
 import numpy as np
 import cvxpy as cp
 from .base import BaseSolver
+from utils import getGrid
 
 def disco_mixture(controls, target, grid_min, grid_max, grid_ord, M, simplex):
     num_controls = len(controls)
@@ -60,6 +61,9 @@ class MixtureSolver(BaseSolver):
         
     def evaluate_counterfactual(self, controls, weights, **kwargs):     
         grid_ord = kwargs.get("grid_ord")
+        target = kwargs.get("target")
+        if grid_ord is None:
+            _, _, grid_ord = getGrid(target, controls, kwargs.get("G") )
         evgrid = kwargs.get("evgrid")
         controls_cdf = kwargs.get("controls_cdf", None)
         

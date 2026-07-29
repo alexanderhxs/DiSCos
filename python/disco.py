@@ -2,11 +2,11 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from .solvers import Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver, TangentialWassersteinSolver, EnergySolver
-from .inference.inference import run_bootstrap_ci
-from .inference.permutation import run_permutation_test
-from .utils import getGrid, myQuant
-from .models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, TargetData, ControlsData, PermutResult
+from solvers import Quantile1DSolver, MixtureSolver, SlicedWassersteinSolver, TangentialWassersteinSolver, EnergySolver
+from inference.inference import run_bootstrap_ci
+from inference.permutation import run_permutation_test
+from utils import getGrid, myQuant
+from models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, TargetData, ControlsData, PermutResult
 
 
 class DiSCo:
@@ -220,23 +220,25 @@ class DiSCo:
     
     def _iter_joint(self):
         pre_treatment_periods = [pt for pt in self.periods if pt <= self.T0_idx]
-        target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values 
-                       for pt in pre_treatment_periods]
+
+        #just append all pre treatment data together for target and controls, then call fit_weights_joint once
+        target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values for pt in pre_treatment_periods]
         controls_data = []
         for cid in self.controls_id:
             c_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.y_col].values for pt in pre_treatment_periods]
             controls_data.append(c_data)
 
+        #grid_min, grid_max, grid_ord = getGrid(target_data[0], controls_data[0], self.G)
         weights = self.solver.fit_weights_joint(
-            targets_list=target_data, 
-            controls_list=controls_data, 
-            #grid_min=grid_min, 
-            #grid_max=grid_max, 
-            #grid_ord=grid_ord, 
-            #M=self.M, 
-            simplex=self.simplex,
-            q_min=0, q_max=1
-        )
+                targets_list=target_data, 
+                controls_list=controls_data, 
+                #grid_min=grid_min, 
+                #grid_max=grid_max, 
+                #grid_ord=grid_ord, 
+                M=self.M, 
+                simplex=self.simplex,
+                q_min=0, q_max=1
+            )
 
         results_by_period = {
             t: PeriodResult(
@@ -255,24 +257,40 @@ class DiSCo:
         for t in self.periods}
 
         return results_by_period
+    
+    def _second_level_fit(self, weights):
+        pre_treatment_periods = [pt for pt in self.periods if pt <= self.T0_idx]
+
+        #just append all pre treatment data together for target and controls, then call fit_weights_joint once
+        target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values for pt in pre_treatment_periods]
+        controls_data = []
+        for cid in self.controls_id:
+            c_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.y_col].values for pt in pre_treatment_periods]
+            controls_data.append(c_data)
+
+        weights = self.solver.second_level_fit(
+            weights=weights,
+            targets_list=target_data,
+            controls_list=controls_data)
+        return weights
 
 
     def fit(self) -> DiSCoResult:
         """
         Run the complete DiSCo estimation across all periods in parallel.
         """
-        if not self.joint_opt:
-            results = Parallel(n_jobs=self.num_cores)(
-                delayed(self._iter_period)(t) for t in self.periods
-            )
-            results = [r for r in results if r is not None]
         
-            if not results:
-                raise ValueError("No valid periods data found.")
-            
-            self.results_by_period = {r['t']: r['period_result'] for r in results}
-        else:
-            self.results_by_period = self._iter_joint()
+        results = Parallel(n_jobs=self.num_cores)(
+            delayed(self._iter_period)(t) for t in self.periods
+        )
+        results = [r for r in results if r is not None]
+    
+        if not results:
+            raise ValueError("No valid periods data found.")
+        
+        self.results_by_period = {r['t']: r['period_result'] for r in results}
+    
+        #self.results_by_period = self._iter_joint()
             
         
         # Average pre-treatment weights
@@ -284,8 +302,16 @@ class DiSCo:
                 
         if not pre_treat_weights:
             raise ValueError("No pre-treatment periods found or calculated.")
+        
+        if self.joint_opt:
             
-        self.weights_opt = np.mean(pre_treat_weights, axis=0)
+            averaging_weigths = self._second_level_fit(pre_treat_weights)
+            print("Averaging weights from pre-treatment periods with second-level optimization.")
+            print("Averaging weights:", averaging_weigths)
+            self.weights_opt = np.average(np.column_stack(pre_treat_weights), axis=1, weights=averaging_weigths)
+
+        else:    
+            self.weights_opt = np.mean(pre_treat_weights, axis=0)
 
         # calculating the counterfactual target quantiles and CDF
         for t in self.periods:
@@ -301,7 +327,8 @@ class DiSCo:
                     evgrid=self.evgrid,
                     controls_cdf=p_res.controls.cdf,
                     controls_q=p_res.controls.quantiles,
-                    target_q=p_res.target.quantiles
+                    target_q=p_res.target.quantiles,
+                    G = self.G
                 )
                 
                 p_res.DiSCo.cdf = eval_res.get("disco_cdf", None)

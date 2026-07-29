@@ -6,11 +6,10 @@ from ..models import DiSCoTEAResult
 from .base import BaseTEA
 
 class TransportMapTEA2(BaseTEA):
-    def evaluate(self) -> DiSCoTEAResult:
-        treats = {}
-        quant_list = sorted(list(set([0.0] + [s for s in self.samples if 0 < s < 1] + [1.0])))
-        q_labels = [f"Q{i+1}" for i in range(len(quant_list) - 1)]
+    
+    def _calculate_transport_map(self, weights, quant_list, q_labels):
 
+        treats = {}
         for t in self.periods:
             p_res = self.disco.results_periods[t]
             target_dist = np.asarray(p_res.target.data)
@@ -19,13 +18,21 @@ class TransportMapTEA2(BaseTEA):
             N = len(target_dist)
 
             controls_data = p_res.controls.data
-            weights = self.disco.weights if self.disco.weights is not None else np.ones(len(controls_data))/len(controls_data)
             
-    
             controls_all = np.concatenate(controls_data) if controls_data is not None and len(controls_data) > 0 else np.empty((0, target_dist.shape[1]))
 
-            weights_target = np.ones(N) / N
-            weights_cf = [weights[i] / len(controls_data[i]) for i in range(len(controls_data)) for _ in range(len(controls_data[i]))]
+            weights_cf = np.array([weights[i] / len(controls_data[i]) for i in range(len(controls_data)) for _ in range(len(controls_data[i]))], dtype=np.float64)
+            
+            # Adjust for numerical instabilities or negative weights from non-simplex solvers
+            negative_weights = np.where(weights_cf < 0.0)
+            weights_cf[negative_weights] = 0
+            check = np.sum(weights_cf)
+            if check > 0:
+                weights_cf = weights_cf / check
+            else:
+                weights_cf = np.ones(len(weights_cf), dtype=np.float64) / len(weights_cf)
+                
+            weights_target = np.ones(N, dtype=np.float64) / N
 
             #all_data = np.vstack((target_dist, controls_all))
             #mean_val = np.mean(all_data, axis=0)
@@ -35,11 +42,11 @@ class TransportMapTEA2(BaseTEA):
             target_std = np.std(target_dist, axis=0)
             target_std[target_std == 0] = 1.0
 
-            target_scaled = (target_dist  / target_std)
-            cf_scaled = (controls_all / target_std)
+            #target_scaled = (target_dist  / target_std)
+            #cf_scaled = (controls_all / target_std)
 
-            cost_matrix = ot.dist(target_scaled, cf_scaled, metric='euclidean')
-            T_samples = ot.emd(weights_target, weights_cf, cost_matrix)
+            cost_matrix = ot.dist(target_dist, controls_all, metric='euclidean')
+            T_samples = ot.emd(weights_target, weights_cf, cost_matrix, numItermax=1e7)
 
             df_target = pd.DataFrame(target_dist)
             df_cf = pd.DataFrame(controls_all)
@@ -68,6 +75,44 @@ class TransportMapTEA2(BaseTEA):
             df_T_agg = pd.DataFrame(np.round(T_aggregated * 100, 4), index=all_bins, columns=all_bins)
             
             treats[self.t_mapper[t]] = df_T_agg
+
+        return treats
+
+    def evaluate(self) -> DiSCoTEAResult:
+        
+        treats = {}
+        quant_list = sorted(list(set([0.0] + [s for s in self.samples if 0 < s < 1] + [1.0])))
+        q_labels = [f"Q{i+1}" for i in range(len(quant_list) - 1)]
+
+        treats['Estimate'] = self._calculate_transport_map(self.disco.weights, quant_list, q_labels)
+
+        if self.CI:
+            weights_lower = self.disco.CI.weights.lower
+            weights_upper = self.disco.CI.weights.upper
+
+            treats['Upper'] = self._calculate_transport_map(weights_upper, quant_list, q_labels)
+            treats['Lower'] = self._calculate_transport_map(weights_lower, quant_list, q_labels)
+
+        treats_H0 = {}
+        for t, df_t in treats['Estimate'].items():
+            
+            # 1. Reine NumPy Null-Matrix in der richtigen Größe erstellen
+            arr_h0 = np.zeros((len(df_t.index), len(df_t.columns)))
+
+            # 2. Marginals berechnen
+            target_marginals = df_t.sum(axis=1)
+
+            # 3. Diagonale in der ungeschützten NumPy-Matrix füllen
+            np.fill_diagonal(arr_h0, target_marginals)
+
+            # 4. Erst jetzt das Pandas DataFrame daraus bauen
+            df_h0 = pd.DataFrame(arr_h0, index=df_t.index, columns=df_t.columns)
+
+            treats_H0[t] = df_h0
+        treats['H0'] = treats_H0
+        
+
+
 
         return DiSCoTEAResult(
             agg=self.agg, treats=treats, grid=self.disco.evgrid,

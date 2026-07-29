@@ -1,26 +1,25 @@
 import numpy as np
 import cvxpy as cp
-import scoringrules as sr
+#import scoringrules as sr
+from scipy.spatial.distance import cdist
 from .base import BaseSolver
 
 class EnergySolver(BaseSolver):
-    def fit_weights(self, target, controls, **kwargs):
-        """
-        target: numpy array der Form (n_t, d) - n_t Samples, d Dimensionen pro Periode
-        controls: Liste der Länge J, wobei Element controls[j] ein Array der Form (n_j, d) ist
-        """
-        J = len(controls) # J: Anzahl der Kontroll-Einheiten
-        target = np.asarray(target)
-        if target.size > 0 and target.ndim == 1:
-            target = target[:, None] # target wird zu Shape (n_t, 1) falls 1D
-        n_t = target.shape[0] if target.size > 0 else 0 # n_t: Anzahl Observations im Target
-        d = target.shape[1] if target.size > 0 else 1   # d: Dimension des Features
 
-        A = np.zeros(J) # Shape: (J,) - Energy dist Target -> jede Control
-        D = np.zeros((J, J)) # Shape: (J, J) - Energy dist Controls untereinander
-        valid_mask = np.ones(J, dtype=bool) # Shape: (J,)
-
-        proc_controls = [] # Liste (Länge J) von validen Control-Arrays (Shape: (n_j, d))
+    # ---------------------------------------------------------
+    # Hilfsfunktionen
+    # ---------------------------------------------------------
+    @staticmethod
+    def _preprocess_controls(controls, d):
+        """Preprocesse Controls: 1D→2D konvertieren, leere markieren.
+        
+        Returns:
+            proc_controls: Liste (Länge J) von Arrays mit Shape (n_j, d)
+            valid_mask: boolean Array mit Shape (J,)
+        """
+        J = len(controls)
+        valid_mask = np.ones(J, dtype=bool)
+        proc_controls = []
         for j in range(J):
             c = np.asarray(controls[j])
             if c.size == 0:
@@ -30,89 +29,141 @@ class EnergySolver(BaseSolver):
                 if c.ndim == 1:
                     c = c[:, None]
                 proc_controls.append(c)
+        return proc_controls, valid_mask
 
+    @staticmethod
+    def _compute_energy_matrices(target, proc_controls, valid_mask):
+        """Berechne die Energy-Distance-Matrizen A und D.
+        
+        Verwendet scipy.spatial.distance.cdist statt 3D-Broadcasting,
+        um den Speicherverbrauch von O(n_j * n_k * d) auf O(n_j * n_k) zu reduzieren.
+        
+        Args:
+            target: Array mit Shape (n_t, d) oder None
+            proc_controls: Liste von Arrays mit Shape (n_j, d)
+            valid_mask: boolean Array mit Shape (J,)
+            
+        Returns:
+            A: Array mit Shape (J,) — mean pairwise distance Control j ↔ Target
+            D: Array mit Shape (J, J) — mean pairwise distance Control j ↔ Control k
+        """
+        J = len(proc_controls)
+        A = np.zeros(J)
+        D = np.zeros((J, J))
+        
+        n_t = target.shape[0] if target is not None and target.size > 0 else 0
+        
         for j in range(J):
             if not valid_mask[j]:
                 continue
-            c_j = proc_controls[j] # Shape: (n_j, d)
+            c_j = proc_controls[j]  # Shape: (n_j, d)
+            
             if n_t > 0:
-                # Broadcasting von c_j (n_j, 1, d) und target (1, n_t, d) -> diff Shape: (n_j, n_t, d)
-                diff = c_j[:, None, :] - target[None, :, :]
-                A[j] = np.mean(np.linalg.norm(diff, axis=-1)) # A[j] ist ein Skalar
-
+                # cdist berechnet die (n_j, n_t) Distanzmatrix direkt,
+                # ohne den (n_j, n_t, d) Zwischentensor zu allokieren
+                A[j] = np.mean(cdist(c_j, target, metric='euclidean'))
+            
             for k in range(j, J):
                 if not valid_mask[k]:
                     continue
-                c_k = proc_controls[k] # Shape: (n_k, d)
-                # Broadcasting von c_j (n_j, 1, d) und c_k (1, n_k, d) -> diff Shape: (n_j, n_k, d)
-                diff = c_j[:, None, :] - c_k[None, :, :]
-                val = np.mean(np.linalg.norm(diff, axis=-1)) # val ist ein Skalar
+                c_k = proc_controls[k]  # Shape: (n_k, d)
+                val = np.mean(cdist(c_j, c_k, metric='euclidean'))
                 D[j, k] = val
                 D[k, j] = val
         
-        # ---------------------------------------------------------
-        # 3. Der CVXPY PSD-Trick (Positive Semi-Definite)
-        # ---------------------------------------------------------
-        # Die Energy Divergence zieht die Streuung ab: Loss = w^T A - 0.5 * w^T D w
-        # CVXPY benötigt für cp.quad_form eine positiv semi-definite Matrix.
-        H = -0.5 * D
+        return A, D
+
+    @staticmethod
+    def _make_psd_and_scale(H, A):
+        """Mache H positiv semi-definit (PSD-Trick) und skaliere H und A gemeinsam.
         
-        # Wir berechnen die Eigenwerte, um H zu shiften
+        Da sum(w) = 1 auf dem Simplex, verschiebt das Addieren einer Konstanten
+        auf alle Einträge von H das Minimum nicht.
+        
+        Args:
+            H: Quadratische Matrix mit Shape (J, J), wird modifiziert zu PSD
+            A: Linearer Koeffizientenvektor mit Shape (J,)
+            
+        Returns:
+            H_psd: PSD-Matrix mit Shape (J, J), skaliert
+            A_scaled: Skalierter linearer Koeffizientenvektor mit Shape (J,)
+        """
+        J = H.shape[0]
         eigenvalues = np.linalg.eigvalsh(H)
         min_eig = np.min(eigenvalues)
         
         if min_eig < 0:
-            # Da sum(w) = 1 gilt, können wir eine Konstante auf alle Felder addieren,
-            # ohne das Minimum auf dem Simplex zu verschieben.
-            gamma = -min_eig + 1e-6 
+            gamma = -min_eig + 1e-6
             H_psd = H + gamma * np.ones((J, J))
         else:
-            H_psd = H
+            H_psd = H.copy()
         
         scaling_factor = np.max(np.abs(H_psd)) if np.max(np.abs(H_psd)) > 0 else 1.0
         H_psd /= scaling_factor
-        A /= scaling_factor
+        A_scaled = A / scaling_factor
         
+        return H_psd, A_scaled
 
-        # ---------------------------------------------------------
-        # 4. CVXPY Optimierung
-        # ---------------------------------------------------------
-        simplex = kwargs.get("simplex", True) 
-        w = cp.Variable(J, nonneg=simplex)  
+    @staticmethod
+    def _solve_qp(A, H_psd, J, valid_mask, simplex=True):
+        """Löse das quadratische Programm: min A@w + w^T H_psd w, s.t. sum(w)=1.
         
-        # Zielfunktion: Linearer Term + Quadratischer Term
-        # Verwende cp.psd_wrap, um numerische Ungenauigkeiten bei der PSD-Prüfung von CVXPY zu umgehen
+        Returns:
+            weights_opt: Array mit Shape (J,)
+        """
+        w = cp.Variable(J, nonneg=simplex)
+        
         objective = cp.Minimize(A @ w + cp.quad_form(w, cp.psd_wrap(H_psd)))
         
-        # Nebenbedingungen (Constraints)    
         constraints = [cp.sum(w) == 1]
         for j in range(J):
             if not valid_mask[j]:
                 constraints.append(w[j] == 0)
-
-        prob = cp.Problem(objective, constraints)
         
+        prob = cp.Problem(objective, constraints)
         # OSQP ist für QP-Probleme meist schneller und robuster als SCS
         prob.solve(solver=cp.OSQP, max_iter=10000)
         
         # Fallback auf SCS, falls OSQP (aus numerischen Gründen) scheitert
         if prob.status not in ["optimal", "optimal_inaccurate"]:
             prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
-            
+        
         weights_opt = w.value
         
-        # ---------------------------------------------------------
-        # 5. Fallbacks und Bereinigung (Clean-up)
-        # ---------------------------------------------------------
         if weights_opt is None:
-            # Wenn alles fehlschlägt, Gleichverteilung zurückgeben
             weights_opt = np.ones(J) / J
-            
+        
         if simplex:
-            # Numerische Ungenauigkeiten vom Solver bereinigen (z.B. -1e-18 -> 0)
             weights_opt = np.clip(weights_opt, 0, 1)
-            # Exakt auf 1 normalisieren
-            weights_opt /= np.sum(weights_opt) 
+            weights_opt /= np.sum(weights_opt)
+        
+        return weights_opt
+
+    # ---------------------------------------------------------
+    # Hauptmethoden
+    # ---------------------------------------------------------
+    def fit_weights(self, target, controls, **kwargs):
+        """
+        target: numpy array der Form (n_t, d) - n_t Samples, d Dimensionen pro Periode
+        controls: Liste der Länge J, wobei Element controls[j] ein Array der Form (n_j, d) ist
+        """
+        J = len(controls)
+        target = np.asarray(target)
+        if target.size > 0 and target.ndim == 1:
+            target = target[:, None]
+        d = target.shape[1] if target.size > 0 else 1
+
+        proc_controls, valid_mask = self._preprocess_controls(controls, d)
+        A, D = self._compute_energy_matrices(target, proc_controls, valid_mask)
+        
+        # ---------------------------------------------------------
+        # PSD-Trick und Optimierung
+        # ---------------------------------------------------------
+        # Die Energy Divergence: Loss = w^T A - 0.5 * w^T D w
+        H = -0.5 * D
+        simplex = kwargs.get("simplex", True)
+        H_psd, A_scaled = self._make_psd_and_scale(H, A)
+        weights_opt = self._solve_qp(A_scaled, H_psd, J, valid_mask, simplex)
             
         return weights_opt
     
@@ -121,7 +172,7 @@ class EnergySolver(BaseSolver):
         grid_ord = kwargs.get("grid_ord")
         evgrid = kwargs.get("evgrid")
 
-        from ..utils import sample_counterfactual_distribution
+        from utils import sample_counterfactual_distribution
         # counterfactual: Array mit resampelten/gepoolten Werten, typisches Shape (N_pool, d)
         counterfactual = sample_counterfactual_distribution(controls, weights, grid_ord)
         
@@ -161,23 +212,11 @@ class EnergySolver(BaseSolver):
         if target.size == 0:
             return np.nan
         if target.ndim == 1:
-            target = target[:, None] # target Shape: (n_t, 1)
-        n_t = target.shape[0] # n_t: Anzahl Target Observations
-        d = target.shape[1]   # d: Feature-Dimensionen
+            target = target[:, None]
         
-        J = len(controls) # J: Anzahl Kontrollgruppen
-        valid_mask = np.ones(J, dtype=bool) # Shape: (J,)
-        proc_controls = [] # Liste (Länge J), Elemente Shape: (n_j, d)
-        
-        for j in range(J):
-            c = np.asarray(controls[j])
-            if c.size == 0:
-                valid_mask[j] = False
-                proc_controls.append(np.empty((0, d)))
-            else:
-                if c.ndim == 1:
-                    c = c[:, None]
-                proc_controls.append(c)
+        J = len(controls)
+        d = target.shape[1]
+        proc_controls, valid_mask = self._preprocess_controls(controls, d)
 
         if not np.any(valid_mask):
             return np.nan
@@ -192,123 +231,105 @@ class EnergySolver(BaseSolver):
             else:
                 return np.nan
 
-        A = np.zeros(J)
-        D = np.zeros((J, J))
-
-        for j in range(J):
-            if not valid_mask[j] or weights[j] == 0:
-                continue
-            c_j = proc_controls[j]
-            diff = c_j[:, None, :] - target[None, :, :]
-            A[j] = np.mean(np.linalg.norm(diff, axis=-1))
-
-            for k in range(j, J):
-                if not valid_mask[k] or weights[k] == 0:
-                    continue
-                c_k = proc_controls[k]
-                diff = c_j[:, None, :] - c_k[None, :, :]
-                val = np.mean(np.linalg.norm(diff, axis=-1))
-                D[j, k] = val
-                D[k, j] = val
+        # Verwende gemeinsame Hilfsfunktion mit cdist
+        A, D = self._compute_energy_matrices(target, proc_controls, valid_mask)
         
-        target_diff = target[:, None, :] - target[None, :, :]
-        target_spread = np.mean(np.linalg.norm(target_diff, axis=-1))
+        # Target-Spread: E[||Y - Y'||] — verwende cdist für Konsistenz
+        target_spread = np.mean(cdist(target, target, metric='euclidean'))
         
         energy_dist = (A @ weights) - 0.5 * (weights.T @ D @ weights) - 0.5 * target_spread
         return float(energy_dist)
     
 
-    def fit_weights_joint(self, targets_list, controls_list, **kwargs):
+    def _compute_joint_energy_matrices(self, targets_list, controls_list):
+        """Berechne aggregierte Energy-Matrizen über mehrere Zeitperioden.
+        
+        Gemeinsame Logik für fit_weights_joint und second_level_fit.
+        
+        Args:
+            targets_list: Liste von Target-Arrays, Länge T0
+            controls_list: Liste von Control-Listen, Länge J, jeweils Subliste Länge T0
+            
+        Returns:
+            A_total: Aggregierter linearer Term, Shape (J,)
+            D_total: Aggregierte Distanzmatrix, Shape (J, J)
+        """
         T0 = len(targets_list)
-        # Wir gehen davon aus, dass die Anzahl der Kontroll-Einheiten J über die Zeit konstant ist
-        J = len(controls_list) 
+        J = len(controls_list)
         
         A_total = np.zeros(J)
         D_total = np.zeros((J, J))
         
-        # 1. & 2. Loss-Komponenten aggregieren
         for t in range(T0):
             target_t = np.asarray(targets_list[t])
-            controls_t = [controls_list[j][t] for j in range(J)] 
+            controls_t = [controls_list[j][t] for j in range(J)]
             
             if target_t.size > 0 and target_t.ndim == 1:
                 target_t = target_t[:, None]
             
-            n_t = target_t.shape[0] if target_t.size > 0 else 0
             d = target_t.shape[1] if target_t.size > 0 else 1
             
-            A_t = np.zeros(J)
-            D_t = np.zeros((J, J))
-            valid_mask = np.ones(J, dtype=bool)
+            proc_controls, valid_mask = self._preprocess_controls(controls_t, d)
+            A_t, D_t = self._compute_energy_matrices(target_t, proc_controls, valid_mask)
             
-            proc_controls = []
-            for j in range(J):
-                c = np.asarray(controls_t[j])
-                # Hier wird die variable Länge n_{j,t} verarbeitet!
-                if c.size == 0:
-                    valid_mask[j] = False
-                    proc_controls.append(np.empty((0, d)))
-                else:
-                    if c.ndim == 1:
-                        c = c[:, None]
-                    proc_controls.append(c)
-                    
-            for j in range(J):
-                if not valid_mask[j]: continue
-                c_j = proc_controls[j] # Shape: (n_{j,t}, d)
-                
-                if n_t > 0:
-                    # Broadcasting funktioniert unabhängig von unterschiedlichen n_t und n_{j,t}
-                    diff = c_j[:, None, :] - target_t[None, :, :]
-                    A_t[j] = np.mean(np.linalg.norm(diff, axis=-1))
-                
-                for k in range(j, J):
-                    if not valid_mask[k]: continue
-                    c_k = proc_controls[k] # Shape: (n_{k,t}, d)
-                    
-                    # Broadcasting funktioniert auch hier, selbst wenn n_{j,t} != n_{k,t}
-                    diff = c_j[:, None, :] - c_k[None, :, :]
-                    val = np.mean(np.linalg.norm(diff, axis=-1))
-                    D_t[j, k] = val
-                    D_t[k, j] = val
-                    
-            # Aggregation über die Zeit
             A_total += A_t
             D_total += D_t
+        
+        return A_total, D_total
+
+    def fit_weights_joint(self, targets_list, controls_list, **kwargs):
+        T0 = len(targets_list)
+        J = len(controls_list)
+        
+        A_total, D_total = self._compute_joint_energy_matrices(targets_list, controls_list)
             
         # ---------------------------------------------------------
-        # 3. Der CVXPY PSD-Trick mit aggregierten Matrizen
+        # PSD-Trick mit aggregierten Matrizen
         # ---------------------------------------------------------
         H = -0.5 * D_total
-        eigenvalues = np.linalg.eigvalsh(H)
-        min_eig = np.min(eigenvalues)
+        simplex = kwargs.get("simplex", True)
         
-        if min_eig < 0:
-            gamma = -min_eig + 1e-6 
-            H_psd = H + gamma * np.ones((J, J))
-        else:
-            H_psd = H
-            
-        scaling_factor = np.max(np.abs(H_psd)) if np.max(np.abs(H_psd)) > 0 else 1.0
-        H_psd /= scaling_factor
-        A_total /= scaling_factor
-        
-        # ---------------------------------------------------------
-        # 4. CVXPY Optimierung
-        # ---------------------------------------------------------
-        import cvxpy as cp # Nur zur Sicherheit, falls oben im Skript noch nicht importiert
-        
-        simplex = kwargs.get("simplex", True) 
-        w = cp.Variable(J, nonneg=simplex)  
-        
-        objective = cp.Minimize(A_total @ w + cp.quad_form(w, cp.psd_wrap(H_psd)))
-        
-        constraints = [cp.sum(w) == 1]
-        
-        # Falls Einheiten komplett fehlen (über alle t), zwingen wir das Gewicht auf 0
+        # Maske: Einheiten die über alle Perioden komplett fehlen
+        all_zero_mask = np.ones(J, dtype=bool)
         for j in range(J):
-            if np.all(D_total[j, :] == 0) and A_total[j] == 0: 
-                constraints.append(w[j] == 0)
+            if np.all(D_total[j, :] == 0) and A_total[j] == 0:
+                all_zero_mask[j] = False
+        
+        H_psd, A_scaled = self._make_psd_and_scale(H, A_total)
+        weights_opt = self._solve_qp(A_scaled, H_psd, J, all_zero_mask, simplex)
+            
+        return weights_opt
+    
+    def second_level_fit(self, weights, targets_list, controls_list):
+        
+        T0 = len(targets_list)
+        J = len(controls_list)
+        
+        A_total, D_total = self._compute_joint_energy_matrices(targets_list, controls_list)
+            
+        # ---------------------------------------------------------
+        # PSD-Trick mit aggregierten Matrizen
+        # ---------------------------------------------------------
+        H = -0.5 * D_total
+        H_psd, A_scaled = self._make_psd_and_scale(H, A_total)
+        
+        # ---------------------------------------------------------
+        # CVXPY Optimierung: Konvexkombination der Perioden-Gewichte
+        # ---------------------------------------------------------
+        weigths = np.column_stack(weights)  # Shape: (J, T0)
+
+        lamb = cp.Variable(T0, nonneg=True)  
+        
+        objective = cp.Minimize(A_scaled @ (weigths @ lamb) + cp.quad_form(weigths @ lamb, cp.psd_wrap(H_psd)))
+        
+        constraints = [cp.sum(lamb) == 1]
+        
+        # Prüfe ob bestimmte Perioden keine Daten haben (alle Controls + Target leer)
+        # Hinweis: lamb hat Dimension T0, nicht J!
+        for t in range(T0):
+            target_t = np.asarray(targets_list[t])
+            if target_t.size == 0:
+                constraints.append(lamb[t] == 0)
 
         prob = cp.Problem(objective, constraints)
         prob.solve(solver=cp.OSQP, max_iter=10000)
@@ -316,16 +337,15 @@ class EnergySolver(BaseSolver):
         if prob.status not in ["optimal", "optimal_inaccurate"]:
             prob.solve(solver=cp.SCS, max_iters=10000, eps=1e-5)
             
-        weights_opt = w.value
+        weights_opt = lamb.value
         
         # ---------------------------------------------------------
-        # 5. Clean-up
+        # Clean-up: Fallback hat Dimension T0 (nicht J!)
         # ---------------------------------------------------------
         if weights_opt is None:
-            weights_opt = np.ones(J) / J
+            weights_opt = np.ones(T0) / T0
             
-        if simplex:
-            weights_opt = np.clip(weights_opt, 0, 1)
-            weights_opt /= np.sum(weights_opt) 
+        weights_opt = np.clip(weights_opt, 0, 1)
+        weights_opt /= np.sum(weights_opt) 
             
         return weights_opt
