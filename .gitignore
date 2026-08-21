@@ -1,0 +1,15 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+/Meta/
+/doc/
+docs
+.venv/
+__pycache__/
+*.pyc
+/python/results/
+.vscode
+*.md
+/R/
+*.dta
