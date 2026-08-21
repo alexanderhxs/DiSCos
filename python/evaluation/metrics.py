@@ -7,8 +7,9 @@ from scipy.stats import ks_2samp
 import ot
 # pyrefly: ignore [missing-import]
 import scoringrules as sr
+from ..utils import sample_counterfactual_distribution
 
-def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000) -> PreTreatmentFitMetrics:
+def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000, max_points = 25000) -> PreTreatmentFitMetrics:
     """
     Calculates goodness-of-fit metrics for all pre-treatment periods.
     For 1D, calculates deterministically on the grid without sampling,
@@ -75,22 +76,32 @@ def calculate_pretreatment_fit(disco_res: DiSCoResult, eval_size: int = 1000) ->
                 
             weights_target = weights_target / np.sum(weights_target)
 
+            # 1. Wasserstein Distanzen auf (ggf. gecapptem) Sample berechnen, um O(N^2) RAM-Explosionen zu verhindern
+            if len(controls_all) > max_points or len(target_data) > max_points:
+                n_cf = min(len(controls_all), max_points)
+                n_t = min(len(target_data), max_points)
+                
+                disco_dist_w = sample_counterfactual_distribution(controls_data, weights, grid=p_res.target.grid, num_samples=n_cf)
+                target_dist_w = target_data[np.random.choice(len(target_data), size=n_t, replace=False)]
+                
+                weights_cf_w = np.ones(n_cf, dtype=np.float64) / n_cf
+                weights_target_w = np.ones(n_t, dtype=np.float64) / n_t
+            else:
+                disco_dist_w = controls_all
+                target_dist_w = target_data
+                weights_cf_w = weights_cf
+                weights_target_w = weights_target
 
-            target_std = np.std(target_data, axis=0)
-            target_std[target_std == 0] = 1.0
-            target_scaled = target_data / target_std
-            cf_scaled = controls_all / target_std
-
-            cost_matrix = ot.dist(target_data, controls_all, metric='euclidean')
-            w1 = float(ot.emd2(weights_target, weights_cf, cost_matrix, numItermax=int(1e6)))
+            cost_matrix = ot.dist(target_dist_w, disco_dist_w, metric='euclidean')
+            w1 = float(ot.emd2(weights_target_w, weights_cf_w, cost_matrix, numItermax=int(1e6)))
             
-            cost_matrix_w2 = ot.dist(target_data, controls_all, metric='sqeuclidean')
-            w2 = float(ot.emd2(weights_target, weights_cf, cost_matrix_w2, numItermax=int(1e6)))
+            cost_matrix_w2 = ot.dist(target_dist_w, disco_dist_w, metric='sqeuclidean')
+            w2 = float(ot.emd2(weights_target_w, weights_cf_w, cost_matrix_w2, numItermax=int(1e6)))
 
-            
-            from ..utils import sample_counterfactual_distribution
-            disco_dist = sample_counterfactual_distribution(controls_data, weights, grid=p_res.target.grid, num_samples=eval_size)
-            target_dist = target_data[np.random.choice(len(target_data), size=eval_size)]
+            # 2. Für KS-Statistiken etc. exakt das eval_size Sample ziehen
+            max_eval = min(eval_size, len(target_data))
+            disco_dist = sample_counterfactual_distribution(controls_data, weights, grid=p_res.target.grid, num_samples=max_eval)
+            target_dist = target_data[np.random.choice(len(target_data), size=max_eval, replace=False)]
 
             if disco_res.params.is_multivariate:
                 def _compute_1d_metrics(t_1d, d_1d):

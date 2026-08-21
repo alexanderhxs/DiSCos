@@ -1,6 +1,7 @@
+from data import get_medicaid_data, get_hybrid_data
 import joblib
 from disco import DiSCo
-from temp import get_continuous_data,  generate_dynamic_panel_data, create_mdsc_panel_data, generate_multivariate_panel_dgp
+from data.data import get_continuous_data,  generate_dynamic_panel_data, create_mdsc_panel_data, generate_multivariate_panel_dgp
 import numpy as np
 import argparse
 import joblib
@@ -40,7 +41,11 @@ def parse_args():
 
     # --- MC Parameter ---
     parser.add_argument('--n_mc', type=int, default=1, help='Anzahl der Monte Carlo Iterationen')
-    parser.add_argument('--base_seed', type=int, default=16, help='Basis Seed für MC Simulationen')
+    parser.add_argument('--base_seed', type=int, default=0, help='Basis Seed für MC Simulationen')
+
+    # --- Daten-Optionen ---
+    parser.add_argument('--downsample', type=int, default=None, 
+                        help='Maximale Anzahl an Datenpunkten pro ID und Zeitpunkt (zufälliges Sample)')
 
     # --- Boolean Flags ---
     # In Python 3.9+ ist BooleanOptionalAction perfekt. Es generiert automatisch 
@@ -80,17 +85,45 @@ if __name__ == "__main__":
             #loaded_model = joblib.load('python/disco_results.pkl')
             #df = loaded_model.params.df
             df = get_continuous_data(sample_size=1000, num_controls=25, num_periods=10, dim=2, t_treat=6, seed=current_seed) # t_treat > num_periods for no treatment
+        elif args.data_path == 'medicaid':
+            df = get_medicaid_data()
+            args.id_col = 'STATEFIP'
+            args.time_col = 'YEAR'
+            args.y_col = ['INCWAGE', 'UHRSWORK']
+        elif args.data_path == 'hybrid':
+            df, true_weights = get_hybrid_data('python/data/datasets/medicaid.csv', seed = mc_i)
+            args.id_col = 'STATEFIP'
+            args.time_col = 'YEAR'
+            args.y_col = ['INCWAGE', 'UHRSWORK']
+            args.id_col_target = 'synthetic_target'
+
         else:
             df = pd.read_csv(args.data_path)  # Oder read_parquet, read_excel etc.
 
-        # 3. Dictionary für das Modell aufbauen
+        # Sicherstellen, dass die Zielvariablen float32 sind
+        df[args.y_col] = df[args.y_col].astype(np.float32)
+
+        if args.downsample is not None:
+            logger.info(f"Downsampling auf max {args.downsample} Beobachtungen pro {args.id_col} und {args.time_col}...")
+            sampled_indices = df.groupby([args.id_col, args.time_col]).apply(
+                lambda x: x.sample(n=min(len(x), args.downsample), random_state=current_seed).index
+            ).explode().values
+            df = df.loc[sampled_indices].reset_index(drop=True)
+
+        # 3. Datentypen dynamisch an die DataFrame-Spalten anpassen
+        id_type = df[args.id_col].dtype.type
+        id_target = id_type(args.id_col_target)
+
+        time_type = df[args.time_col].dtype.type
+        t0 = time_type(args.t0)
+
         arguments = {
             'df': df,
             'id_col': args.id_col,
             'time_col': args.time_col,
-            'id_col_target': args.id_col_target,
+            'id_col_target': id_target,
             'y_col': args.y_col,
-            't0': args.t0,
+            't0': t0,
             'M': args.M,
             'G': args.G,
             'B': args.B,
@@ -123,8 +156,11 @@ if __name__ == "__main__":
         disco_results = disco.fit()
 
         out_path = pathlib.Path(args.out)
-        final_out = out_path.parent / f"{out_path.stem}_mc{mc_i}{out_path.suffix}"
-
+        if args.n_mc > 1:
+            final_out = out_path.parent / f"{out_path.stem}_{args.method}_mc{mc_i}{out_path.suffix}"
+        else:
+            final_out = out_path.parent / f"{out_path.stem}_{args.method}{out_path.suffix}"
+        
         logger.info(f"Speichere Ergebnisse in {final_out}...")
         joblib.dump(disco_results, final_out)
         logger.info(f"Ergebnisse für Iteration {mc_i + 1}/{args.n_mc} gespeichert.")

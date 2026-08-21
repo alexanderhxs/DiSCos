@@ -1,18 +1,26 @@
-from IPython.core import magic_arguments
-from scipy.integrate._ivp.ivp import METHODS
-import os
 import sys
-import joblib
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+import os
 
-# Sicherstellen, dass das Projekt-Root im Pfad ist
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import python.models
 sys.modules['models'] = python.models
 
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from python.tea.base import disco_tea
+
+METHODS = ['energy', 'mixture', 'tangential', 'swasserstein']
+DISPLAY_METHODS = {
+    'energy': 'Energy',
+    'mixture': 'Mixture',
+    'tangential': 'Tangential',
+    'swasserstein': 'S-Wasserstein'
+}
 
 def calc_gt_mass_diff(disco_res, bounds):
     """
@@ -65,120 +73,117 @@ def calc_gt_mass_diff(disco_res, bounds):
         
     return pd.DataFrame(gt_diffs)
 
-def main():
-    try:
-        N_MC = 10
-        METHOD = 'swasserstein' # Nur eine Methode, wie gewünscht
+def load_and_calculate_data(method, bounds, n_mc=10):
+    mc_gt_mass_diff = []
+    mc_est_mass_diff = []
+    valid_periods = None
+    t0 = None
+    
+    print(f"Lade und berechne Daten für Methode: {method}...")
+    for i in range(n_mc):
+        pkl_path = os.path.join(project_root, "python", "results", "fits", f"disco_{method}_te_mc{i}.pkl")
+        if not os.path.exists(pkl_path):
+            continue
+            
+        disco_res = joblib.load(pkl_path)
+        if t0 is None:
+            t0 = disco_res.params.t0
+            
+        tea_res = disco_tea(disco_res, agg="prob_mass", graph=False, bounds=bounds)
+        est_df = tea_res.agg_df
+        gt_df = calc_gt_mass_diff(disco_res, bounds=bounds)
         
-        test_bounds = [(-np.inf, -0.2), (-np.inf, 0.2)] 
-        print(f"Starte MC Studie für Probability Mass (Region: {test_bounds})...\n")
-        
-        all_results = []
-        
-        print(f"Auswertung für Methode: {METHOD}")
-        
-        mc_deviations = []
-        mc_gt_target_mass = []
-        mc_gt_mass_diff = []
-        
-        valid_periods = None
-        t0 = None
-        
-        for i in range(N_MC):
-            pkl_path = os.path.join(os.path.dirname(__file__), "results", "fits", f"disco_{METHOD}_te_mc{i}.pkl")
-            if not os.path.exists(pkl_path):
-                continue
+        if gt_df is not None:
+            comparison = pd.merge(gt_df, est_df, on="Time")
+            if valid_periods is None:
+                valid_periods = comparison['Time'].values
                 
-            disco_res = joblib.load(pkl_path)
+            mc_gt_mass_diff.append(comparison['GT Mass Diff'].values)
+            mc_est_mass_diff.append(comparison['Mass Diff'].values)
             
-            if t0 is None:
-                t0 = disco_res.params.t0
-            
-            tea_res = disco_tea(disco_res, agg="prob_mass", graph=False, bounds=test_bounds)
-            est_df = tea_res.agg_df
-            
-            gt_df = calc_gt_mass_diff(disco_res, bounds=test_bounds)
-            
-            if gt_df is not None:
-                comparison = pd.merge(gt_df, est_df, on="Time")
-                
-                if valid_periods is None:
-                    valid_periods = comparison['Time'].values
-                    
-                deviation = comparison['Mass Diff'].values - comparison['GT Mass Diff'].values
-                mc_deviations.append(deviation)
-                mc_gt_target_mass.append(comparison['GT Target Mass'].values)
-                mc_gt_mass_diff.append(comparison['GT Mass Diff'].values)
+    if len(mc_gt_mass_diff) == 0:
+        return None, None, None, None
         
-        if len(mc_deviations) > 0:
-            mc_deviations_arr = np.array(mc_deviations)
-            mean_sq_dev = np.mean(mc_deviations_arr**2, axis=0)
-            max_dev = np.max(np.abs(mc_deviations), axis=0)
+    gt_arr = np.array(mc_gt_mass_diff)
+    est_arr = np.array(mc_est_mass_diff)
+    
+    return valid_periods, t0, gt_arr, est_arr
+
+def plot_prob_mass_effect(bounds):
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
+    axes = axes.flatten()
+    
+    print(f"\n--- MAE for Probability Mass Comparison ---")
+    
+    for idx, method in enumerate(METHODS):
+        ax = axes[idx]
+        periods, t0, gt_arr, est_arr = load_and_calculate_data(method, bounds)
+        
+        if periods is None:
+            ax.text(0.5, 0.5, f"Data missing\n{method}", ha='center', va='center')
+            print(f"{DISPLAY_METHODS[method]:15s} | Data missing")
+            continue
             
-            gt_target_arr = np.array(mc_gt_target_mass)
-            mean_gt_target = np.mean(gt_target_arr, axis=0)
-            
-            gt_diff_arr = np.array(mc_gt_mass_diff)
-            mean_gt_diff = np.mean(gt_diff_arr, axis=0)
-            post_treat_means = mean_sq_dev[t0:]
-            
-            print(f"  Gefundene MC-Iterationen: {len(mc_deviations)}")
-            print(f"  Mean Squared Error über post treatment Perioden: {np.mean(post_treat_means):.4f}")
-            
-            # Gebe die gewünschten Average-Werte pro Periode aus
-            print("\n  Durchschnittliche Werte pro Periode (über alle MC Iterationen):")
-            print("  Time | Avg GT Target Mass | Avg GT Mass Diff | Mean Sq. Error | Max Error (Bias)")
-            print("  " + "-"*75)
-            for idx, t in enumerate(valid_periods):
-                print(f"  {t:4} | {mean_gt_target[idx]:18.4f} | {mean_gt_diff[idx]:16.4f} | {mean_sq_dev[idx]:20.4f} | {max_dev[idx]:20.4f}")
-            
-            all_results.append({
-                'method': METHOD,
-                'periods': valid_periods,
-                'mean_dev': mean_sq_dev,
-                't0': t0,
-                'mc_deviations': mc_deviations_arr
-            })
+        # Raw Error
+        raw_error = est_arr - gt_arr
+        
+        # Calculate MAE
+        pre_idx = np.where(periods <= t0)[0]
+        post_idx = np.where(periods > t0)[0]
+        
+        mae_pre = np.nanmean(np.abs(raw_error[:, pre_idx]))
+        mae_post = np.nanmean(np.abs(raw_error[:, post_idx]))
+        print(f"{DISPLAY_METHODS[method]:15s} | Pre-Treat MAE: {mae_pre:8.4f} | Post-Treat MAE: {mae_post:8.4f}")
+        
+        # Diff-in-Diff adjustment: center around pre-treatment average error
+        pre_indices = np.where(periods <= t0)[0]
+        if len(pre_indices) > 0:
+            pre_avg = np.nanmean(raw_error[:, pre_indices], axis=1, keepdims=True)
         else:
-            print(f"  Keine Daten für Methode {METHOD} gefunden.\n")
+            pre_avg = 0
+            
+        adj_error = raw_error - pre_avg
+        
+        for i in range(len(adj_error)):
+            ax.plot(periods, adj_error[i], color='tab:blue', alpha=0.3, linewidth=1)
+            
+        mean_adj = np.nanmean(adj_error, axis=0)
+        ax.plot(periods, mean_adj, color='darkblue', linewidth=2.5, linestyle='-', marker='o')
+        
+        ax.axhline(y=0.0, color='black', linestyle='--', linewidth=1.5)
+        ax.axvline(x=t0 + 1, color='red', linestyle=':', linewidth=1.5)
+        
+        ax.set_title(DISPLAY_METHODS[method], fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        if idx >= 2:
+            ax.set_xlabel('Time (Periods)', fontsize=10)
+        if idx % 2 == 0:
+            ax.set_ylabel('Adjusted Bias (Est - GT)', fontsize=10)
+            
+    bounds_str = f"Dim1: [{bounds[0][0]}, {bounds[0][1]}], Dim2: [{bounds[1][0]}, {bounds[1][1]}]"
+    fig.suptitle(f'Treatment Effect - Probability Mass\nRegion: {bounds_str}', fontsize=16, fontweight='bold')
+    
+    import matplotlib.lines as mlines
+    blue_line = mlines.Line2D([], [], color='tab:blue', alpha=0.3, label='MC Iteration')
+    dark_line = mlines.Line2D([], [], color='darkblue', marker='o', linewidth=2.5, label='Mean Adjusted Bias')
+    black_line = mlines.Line2D([], [], color='black', linestyle='--', label='True Effect (0.0)')
+    red_line = mlines.Line2D([], [], color='red', linestyle=':', label='Treatment Time')
+    
+    fig.legend(handles=[blue_line, dark_line, black_line, red_line], loc='lower center', ncol=4, bbox_to_anchor=(0.5, 0.02))
 
-        # Plotting (mit Einzel-Trajektorien)
-        if len(all_results) > 0:
-            plt.figure(figsize=(10, 6))
-            
-            res = all_results[0]
-            periods = res['periods']
-            mean_sq_dev = res['mean_dev']
-            t0 = res['t0']
-            mc_deviations_arr = res['mc_deviations']
-            
-            # Zeichne jede MC-Iteration einzeln ein (transparent)
-            for i in range(mc_deviations_arr.shape[0]):
-                plt.plot(periods, mc_deviations_arr[i], color='gray', alpha=0.3, linewidth=1, 
-                         label='Einzelne MC-Iteration' if i == 0 else "")
-            
-            # Zeichne den Durchschnitt
-            #plt.plot(periods, mean_sq_dev, label=f"{res['method']} (Mean Sq. Error)", color='blue', linewidth=2.5, marker='o')
-                
-            plt.axhline(0, color='black', linestyle='--', linewidth=1.5)
-            if t0 is not None:
-                plt.axvline(t0 + 1, color='red', linestyle=':', label='Treatment', linewidth=1.5)
-                
-            plt.title(f'Absolute Abweichung (Est - GT) der Probability Mass\n Method: {METHOD}', fontsize=14, fontweight='bold')
-            plt.xlabel('Zeit (Perioden)', fontsize=12)
-            plt.ylabel('Abweichung vom GT (Probability Mass)', fontsize=12)
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            
-            plot_path = os.path.join(os.path.dirname(__file__), "results", f"prob_mass_mc_study_{METHOD}.png")
-            os.makedirs(os.path.dirname(plot_path), exist_ok=True)
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-            print(f"\nPlot mit Einzel-Trajektorien wurde gespeichert unter: {plot_path}")
+    plt.tight_layout(rect=[0, 0.08, 1, 0.94])
+    
+    out_dir = os.path.dirname(f"C:\\Dokumente\\Studium\\1. Master Thesis\\DiSCos\\python\\results\\")
+    os.makedirs(out_dir, exist_ok=True)
+    plot_path = os.path.join(out_dir, f"mc_metrics_prob_mass.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
 
-    except Exception as e:
-        print(f"Fehler: {e}")
-        import traceback
-        traceback.print_exc()
+def main():
+    test_bounds = [(-np.inf, -0.2), (-np.inf, 0.2)]
+    print("Generiere Plots für Probability Mass...")
+    plot_prob_mass_effect(test_bounds)
+    print("Alle Plots wurden generiert.")
 
 if __name__ == "__main__":
     main()

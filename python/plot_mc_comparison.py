@@ -83,12 +83,15 @@ def plot_distance_metric(metric_key, display_name):
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
     axes = axes.flatten()
     
+    print(f"\n--- MAE for Distance Metric: {display_name} ---")
+    
     for idx, method in enumerate(METHODS):
         ax = axes[idx]
         try:
             data = load_mc_data(method)
         except Exception as e:
             ax.text(0.5, 0.5, f"Data missing\n{method}", ha='center', va='center')
+            print(f"{DISPLAY_METHODS[method]:15s} | Data missing")
             continue
             
         gt_effects_list = data.get('gt_effects', [])
@@ -97,13 +100,23 @@ def plot_distance_metric(metric_key, display_name):
         
         if not gt_effects_list or not est_metrics_list or not naive_metrics_list:
             ax.text(0.5, 0.5, f"Missing metrics\n{method}", ha='center', va='center')
+            print(f"{DISPLAY_METHODS[method]:15s} | Missing metrics")
             continue
             
         periods = np.array(data['periods'])
         t0 = data['t0']
         
-        _, est_arr = extract_metric_arrays(gt_effects_list, est_metrics_list, periods, metric_key)
+        gt_arr, est_arr = extract_metric_arrays(gt_effects_list, est_metrics_list, periods, metric_key)
         _, naive_arr = extract_metric_arrays(gt_effects_list, naive_metrics_list, periods, metric_key)
+        
+        # Calculate MAE
+        pre_idx = np.where(periods <= t0)[0]
+        post_idx = np.where(periods > t0)[0]
+        
+        raw_error = est_arr - gt_arr
+        mae_pre = np.nanmean(np.abs(raw_error[:, pre_idx]))
+        mae_post = np.nanmean(np.abs(raw_error[:, post_idx]))
+        print(f"{DISPLAY_METHODS[method]:15s} | Pre-Treat MAE: {mae_pre:8.4f} | Post-Treat MAE: {mae_post:8.4f}")
         
         # Normalize: Dist_Synth / Dist_Naive
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -146,12 +159,13 @@ def plot_distance_metric(metric_key, display_name):
     os.makedirs(out_dir, exist_ok=True)
     plot_path = os.path.join(out_dir, f"mc_metrics_distance_{metric_key}.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"Saved: {plot_path}")
     plt.close()
 
 def plot_mean_effect(dim, display_name):
     fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True, sharey=True)
     axes = axes.flatten()
+    
+    print(f"\n--- MSE for Simple TEA: {display_name} ---")
     
     for idx, method in enumerate(METHODS):
         ax = axes[idx]
@@ -159,6 +173,7 @@ def plot_mean_effect(dim, display_name):
             data = load_mc_data(method)
         except Exception as e:
             ax.text(0.5, 0.5, f"Data missing\n{method}", ha='center', va='center')
+            print(f"{DISPLAY_METHODS[method]:15s} | Data missing")
             continue
             
         gt_effects_list = data.get('gt_effects', [])
@@ -166,6 +181,7 @@ def plot_mean_effect(dim, display_name):
         
         if not gt_effects_list or not simple_teas:
             ax.text(0.5, 0.5, f"Missing metrics\n{method}", ha='center', va='center')
+            print(f"{DISPLAY_METHODS[method]:15s} | Missing metrics")
             continue
             
         periods = np.array(data['periods'])
@@ -175,6 +191,14 @@ def plot_mean_effect(dim, display_name):
         
         # Raw Error
         raw_error = est_arr - gt_arr
+        
+        # Calculate MSE
+        pre_idx = np.where(periods <= t0)[0]
+        post_idx = np.where(periods > t0)[0]
+        
+        mse_pre = np.nanmean(raw_error[:, pre_idx]**2)
+        mse_post = np.nanmean(raw_error[:, post_idx]**2)
+        print(f"{DISPLAY_METHODS[method]:15s} | Pre-Treat MSE: {mse_pre:8.4f} | Post-Treat MSE: {mse_post:8.4f}")
         
         # Diff-in-Diff adjustment: center around pre-treatment average error
         pre_indices = np.where(periods <= t0)[0]
@@ -217,7 +241,6 @@ def plot_mean_effect(dim, display_name):
     os.makedirs(out_dir, exist_ok=True)
     plot_path = os.path.join(out_dir, f"mc_metrics_mean_effect_dim{dim}.png")
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"Saved: {plot_path}")
     plt.close()
 
 def main():
