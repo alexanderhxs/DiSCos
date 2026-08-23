@@ -1,48 +1,67 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+def _get_pooled_data(fit_synth, period):
+    periods_list = period if isinstance(period, list) else [period]
+    
+    first_p = periods_list[0]
+    first_res = fit_synth.results_periods[first_p]
+    weights = first_res.DiSCo.weights if first_res.DiSCo.weights is not None else fit_synth.weights
+    
+    pooled_target = []
+    pooled_controls = [[] for _ in range(len(weights))]
+    
+    for p in periods_list:
+        p_res = fit_synth.results_periods[p]
+        
+        t_data = p_res.target.data
+        if t_data.ndim == 1:
+            t_data = t_data.reshape(-1, 1)
+        pooled_target.append(t_data)
+        
+        for i, c_data in enumerate(p_res.controls.data):
+            if c_data.ndim == 1:
+                c_data = c_data.reshape(-1, 1)
+            pooled_controls[i].append(c_data)
+            
+    final_target = np.vstack(pooled_target)
+    final_controls = [np.vstack(c_list) if len(c_list) > 0 and sum(len(c) for c in c_list) > 0 else np.array([]) for c_list in pooled_controls]
+    
+    return final_target, final_controls, weights
+
+
 def plot_fit_quantiles(fit_synth, show_controls=False, period=None):    
     periods = sorted(list(fit_synth.results_periods.keys()))
     if period is None:
         period = periods[-1]
         
-    period_res = fit_synth.results_periods[period]
-    # Check if target data is multidimensional
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
-    if is_multi:
-        dim = period_res.target.data.shape[1]
-        weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
-        
+    if is_multi or isinstance(period, list):
+        dim = target_data.shape[1]
         fig, axes = plt.subplots(1, dim, figsize=(6 * dim, 5))
         if dim == 1: axes = [axes]
             
         for d, ax in enumerate(axes):
-            # Lade Dimension d aus test-daten (nicht aus pd.DataFrame by name!)
-            target_data = period_res.target.data[:, d]
-            controls_data = [c[:, d] for c in period_res.controls.data]
+            t_data = target_data[:, d]
+            c_data_list = [c[:, d] for c in controls_data]
             
-            grid_min = min(target_data.min(), np.min([c.min() for c in controls_data if len(c) > 0]))
-            grid_max = max(target_data.max(), np.max([c.max() for c in controls_data if len(c) > 0]))
-            grid = np.linspace(grid_min, grid_max, 200)
+            grid_min = min(t_data.min(), np.min([c.min() for c in c_data_list if len(c) > 0]))
+            grid_max = max(t_data.max(), np.max([c.max() for c in c_data_list if len(c) > 0]))
+            grid = np.linspace(grid_min, grid_max, 2000)
             
-            target_cdf = np.mean(target_data[:, None] <= grid, axis=0)
+            w_sum = np.sum(weights)
+            norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+            
             synth_cdf = np.zeros_like(grid)
-            for c_data, w in zip(controls_data, weights):
+            for c_data, w in zip(c_data_list, norm_weights):
                 if w > 1e-5 and len(c_data) > 0:
                     synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                     
-            # 1. Wir brauchen ein auf [0, 1] verteiltes Standard-Quantilgrid
             q_grid = np.linspace(0, 1, 200)
+            target_quantiles = np.quantile(t_data, q_grid)
             
-            # 2. Target Quantil via np.quantile (äquivalent zu R's quantile)
-            target_quantiles = np.quantile(target_data, q_grid)
-            
-            # 3. Synth Quantil numerisch berechnen (Inverse ECDF)
-            # np.interp erwartet, dass die X-Werte (hier synth_cdf) monoton wachsend sind
-            # Bei ECDFs kann es aber plateaus geben (gleiche CDF-Werte). 
-            # Besserer Ansatz für Inverse CDF: Für jedes q den kleinsten grid-Wert suchen, 
-            # wo die CDF >= q ist.
             synth_quantiles = np.array([grid[np.searchsorted(synth_cdf, q)] if q <= synth_cdf[-1] else grid[-1] for q in q_grid])
             
             ax.plot(q_grid, target_quantiles, color='black', linewidth=3, label='Target')
@@ -54,8 +73,11 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
                 
                 for b in range(n_boots):
                     b_weights = fit_synth.CI.bootmat.weights[:, b]
+                    b_w_sum = np.sum(b_weights)
+                    b_norm_weights = b_weights / b_w_sum if b_w_sum > 1e-8 else b_weights
+                    
                     b_synth_cdf = np.zeros_like(grid)
-                    for c_data, w in zip(controls_data, b_weights):
+                    for c_data, w in zip(c_data_list, b_norm_weights):
                         if w > 1e-5 and len(c_data) > 0:
                             b_synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                             
@@ -68,7 +90,7 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
                 ax.plot(q_grid, upper, color='red', linewidth=1, linestyle='--')
 
             if show_controls:
-                for i, c_data in enumerate(controls_data):
+                for i, c_data in enumerate(c_data_list):
                     if len(c_data) > 0:
                         c_quant = np.quantile(c_data, q_grid)
                         ax.plot(q_grid, c_quant, color='grey', linewidth=1, linestyle='--', label=f'Controls' if i == 0 else None)
@@ -86,14 +108,15 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
             ax.tick_params(axis='both', which='major', labelsize=12)
             ax.grid(linestyle='--', alpha=0.5)
             
+        period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+        plt.suptitle(f'Quantiles Plot ({period_label})', fontsize=16)
         plt.tight_layout()
         plt.show()
         return
 
-    # Fallback auf reines 1D Verhalten
+    # 1D fallback
+    period_res = fit_synth.results_periods[period]
     x_grid = fit_synth.evgrid
-    
-    # Sicherstellen, dass das grid fürs Plotten monoton steigend sortiert ist
     sort_idx = np.argsort(x_grid)
     x_grid = x_grid[sort_idx]
     
@@ -108,7 +131,6 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
         period_idx = periods.index(period)
         lower = fit_synth.CI.quantile.lower[:, period_idx][sort_idx]
         upper = fit_synth.CI.quantile.upper[:, period_idx][sort_idx]
-        # x_grid hinzufügen für korrekte Ausrichtung auf der X-Achse
         plt.plot(x_grid, lower, color='red', linewidth=1, linestyle='--', label='CI (DSC)')
         plt.plot(x_grid, upper, color='red', linewidth=1, linestyle='--')
 
@@ -122,7 +144,6 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
     plt.ylabel('$F^{-1}(x)$', fontsize=14)
     plt.legend(loc='lower right', frameon=True, edgecolor='black', framealpha=1, borderpad=1, fontsize=12)
 
-    # Adding the border around the axis as seen in the R plot
     plt.gca().spines['top'].set_visible(True)
     plt.gca().spines['right'].set_visible(True)
     plt.gca().spines['bottom'].set_visible(True)
@@ -138,27 +159,28 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
     if period is None:
         period = periods[-1]
         
-    period_res = fit_synth.results_periods[period]
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
-    if is_multi:
-        dim = period_res.target.data.shape[1]
-        weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
-        
+    if is_multi or isinstance(period, list):
+        dim = target_data.shape[1]
         fig, axes = plt.subplots(1, dim, figsize=(6 * dim, 5))
         if dim == 1: axes = [axes]
             
         for d, ax in enumerate(axes):
-            target_data = period_res.target.data[:, d]
-            controls_data = [c[:, d] for c in period_res.controls.data]
+            t_data = target_data[:, d]
+            c_data_list = [c[:, d] for c in controls_data]
             
-            grid_min = min(target_data.min(), np.min([c.min() for c in controls_data if len(c) > 0]))
-            grid_max = max(target_data.max(), np.max([c.max() for c in controls_data if len(c) > 0]))
-            grid = np.linspace(grid_min, grid_max, 200)
+            grid_min = min(t_data.min(), np.min([c.min() for c in c_data_list if len(c) > 0]))
+            grid_max = max(t_data.max(), np.max([c.max() for c in c_data_list if len(c) > 0]))
+            grid = np.linspace(grid_min, grid_max, 2000)
             
-            target_cdf = np.mean(target_data[:, None] <= grid, axis=0)
+            w_sum = np.sum(weights)
+            norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+            
+            target_cdf = np.mean(t_data[:, None] <= grid, axis=0)
             synth_cdf = np.zeros_like(grid)
-            for c_data, w in zip(controls_data, weights):
+            for c_data, w in zip(c_data_list, norm_weights):
                 if w > 1e-5 and len(c_data) > 0:
                     synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                     
@@ -171,8 +193,11 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
                 
                 for b in range(n_boots):
                     b_weights = fit_synth.CI.bootmat.weights[:, b]
+                    b_w_sum = np.sum(b_weights)
+                    b_norm_weights = b_weights / b_w_sum if b_w_sum > 1e-8 else b_weights
+                    
                     b_cdf = np.zeros_like(grid)
-                    for c_data, w in zip(controls_data, b_weights):
+                    for c_data, w in zip(c_data_list, b_norm_weights):
                         if w > 1e-5 and len(c_data) > 0:
                             b_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                     boot_synth_cdf[b, :] = b_cdf
@@ -184,7 +209,7 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
                 ax.plot(grid, upper, color='red', linewidth=1, linestyle='--')
 
             if show_controls:
-                for i, c_data in enumerate(controls_data):
+                for i, c_data in enumerate(c_data_list):
                     if len(c_data) > 0:
                         c_cdf = np.mean(c_data[:, None] <= grid, axis=0)
                         ax.plot(grid, c_cdf, color='grey', linewidth=1, linestyle='--', label=f'Controls' if i == 0 else None)
@@ -202,14 +227,14 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
             ax.tick_params(axis='both', which='major', labelsize=12)
             ax.grid(linestyle='--', alpha=0.5)
             
+        period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+        plt.suptitle(f'CDF Plot ({period_label})', fontsize=16)
         plt.tight_layout()
         plt.show()
         return
         
-    # In the CDF space, the x-axis is comprised of the evaluation grid of values (Y)
+    period_res = fit_synth.results_periods[period]
     x_grid = period_res.target.grid
-    
-    # Sicherstellen, dass das grid fürs Plotten monoton steigend sortiert ist
     sort_idx = np.argsort(x_grid)
     x_grid = x_grid[sort_idx]
 
@@ -246,29 +271,28 @@ def plot_fit_copula(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    period_res = fit_synth.results_periods[period]
-    target_data = period_res.target.data
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
-    if not is_multi:
+    if target_data.shape[1] != 2:
         print("Joint Plot wird nur für 2D Daten unterstützt.")
         return
         
-    weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
-    controls_data = [c for w, c in zip(weights, period_res.controls.data) if w > 1e-5 and len(c) > 0]
-    filtered_weights = [w for w in weights if w > 1e-5]
-    
     if len(controls_data) == 0:
         return
     
-    # Target Ranks (u, v) in [0,1]
     N = len(target_data)
     u_target = rankdata(target_data[:, 0]) / N
     v_target = rankdata(target_data[:, 1]) / N
     
     from ..utils import sample_counterfactual_distribution
-    grid = period_res.target.grid
-    disco_dist = sample_counterfactual_distribution(period_res.controls.data, weights, grid=grid, num_samples=N)
+    first_p = period[0] if isinstance(period, list) else period
+    grid = fit_synth.results_periods[first_p].target.grid
+    
+    w_sum = np.sum(weights)
+    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+    
+    disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
     
     if disco_dist is None or len(disco_dist) == 0:
         return
@@ -285,7 +309,7 @@ def plot_fit_copula(fit_synth, period=None):
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     
     axes[0].scatter(u_target, v_target, alpha=0.5, s=20, c='black')
-    axes[0].set_title('Target Copula (Empirical Ranks)', fontsize=14)
+    axes[0].set_title('Target Copula', fontsize=14)
     axes[0].set_xlabel('Rank Dim 1 ($F_1$)', fontsize=12)
     axes[0].set_ylabel('Rank Dim 2 ($F_2$)', fontsize=12)
     
@@ -299,9 +323,10 @@ def plot_fit_copula(fit_synth, period=None):
         ax.set_aspect('equal')
         ax.grid(linestyle='--', alpha=0.3)
         
+    period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+    plt.suptitle(f'Copula Comparison ({period_label})', fontsize=16)
     plt.tight_layout()
     plt.show()
-
 
 def plot_fit_joint_contour(fit_synth, period=None):
     """
@@ -315,53 +340,47 @@ def plot_fit_joint_contour(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    period_res = fit_synth.results_periods[period]
-    target_data = period_res.target.data
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
-    if not is_multi:
+    if target_data.shape[1] != 2:
         print("Joint Contour Plot wird nur für 2D Daten unterstützt.")
         return
         
-    weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
-    controls_data = [c for w, c in zip(weights, period_res.controls.data) if w > 1e-5 and len(c) > 0]
-    filtered_weights = [w for w in weights if w > 1e-5]
-    
     if len(controls_data) == 0:
         return
     
-    # Target Data
     x_t = target_data[:, 0]
     y_t = target_data[:, 1]
     
-    # DSC Mixture Pooling
     pool_x = []
     pool_y = []
     pool_w = []
     
-    for c_data, w in zip(controls_data, filtered_weights):
-        pool_x.extend(c_data[:, 0])
-        pool_y.extend(c_data[:, 1])
-        pool_w.extend([w / len(c_data)] * len(c_data))
+    w_sum = np.sum(weights)
+    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+    
+    for c_data, w in zip(controls_data, norm_weights):
+        if len(c_data) > 0 and w > 1e-6:
+            pool_x.extend(c_data[:, 0])
+            pool_y.extend(c_data[:, 1])
+            pool_w.extend([w / len(c_data)] * len(c_data))
             
     pool_x = np.array(pool_x)
     pool_y = np.array(pool_y)
     pool_w = np.array(pool_w)
     
-    # 2D Grid für die Evaluierung erstellen
     x_min = min(x_t.min(), pool_x.min())
     x_max = max(x_t.max(), pool_x.max())
     y_min = min(y_t.min(), pool_y.min())
     y_max = max(y_t.max(), pool_y.max())
     
-    # Padding
     x_pad = (x_max - x_min) * 0.1
     y_pad = (y_max - y_min) * 0.1
     
     X, Y = np.mgrid[x_min-x_pad:x_max+x_pad:100j, y_min-y_pad:y_max+y_pad:100j]
     positions = np.vstack([X.ravel(), Y.ravel()])
     
-    # KDE Target
     try:
         kde_target = gaussian_kde(np.vstack([x_t, y_t]))
         Z_target = np.reshape(kde_target(positions).T, X.shape)
@@ -369,7 +388,6 @@ def plot_fit_joint_contour(fit_synth, period=None):
         print("LinAlgError beim Berechnen der Target KDE (evtl. Datenpunkte zu dicht).")
         return
         
-    # KDE DSC
     try:
         kde_dsc = gaussian_kde(np.vstack([pool_x, pool_y]), weights=pool_w)
         Z_dsc = np.reshape(kde_dsc(positions).T, X.shape)
@@ -379,16 +397,15 @@ def plot_fit_joint_contour(fit_synth, period=None):
         
     fig, ax = plt.subplots(figsize=(8, 6))
     
-    # Contour plots
     contour_t = ax.contour(X, Y, Z_target, levels=5, colors='black', linewidths=2, alpha=0.8)
     contour_d = ax.contour(X, Y, Z_dsc, levels=5, colors='red', linewidths=2, alpha=0.8)
     
-    # Custom legend
     legend_target = mlines.Line2D([], [], color='black', linewidth=2, label='Target')
     legend_dsc = mlines.Line2D([], [], color='red', linewidth=2, label='DSC')
     ax.legend(handles=[legend_target, legend_dsc], loc='best', frameon=True, edgecolor='black', fontsize=12)
     
-    ax.set_title('Joint Density (KDE Contour Overlay)', fontsize=14)
+    period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+    ax.set_title(f'Joint Density Contour ({period_label})', fontsize=14)
     ax.set_xlabel('Dim 1', fontsize=12)
     ax.set_ylabel('Dim 2', fontsize=12)
     ax.grid(linestyle='--', alpha=0.3)
@@ -400,6 +417,83 @@ def plot_fit_joint_contour(fit_synth, period=None):
     plt.tight_layout()
     plt.show()
 
+def plot_fit_density(fit_synth, period=None):
+    """
+    Erstellt ein überlappendes Histogramm / Dichteplot von Target und DSC.
+    Unterstützt jetzt auch das Plotten mehrerer Perioden gleichzeitig als gemeinsame Verteilung.
+    """
+    periods = sorted(list(fit_synth.results_periods.keys()))
+    if period is None:
+        period = periods[-1]
+        
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    is_multi = fit_synth.params.is_multivariate
+    
+    if is_multi or isinstance(period, list):
+        dim = target_data.shape[1]
+        fig, axes = plt.subplots(1, dim, figsize=(6 * dim, 5))
+        if dim == 1: axes = [axes]
+            
+        for d, ax in enumerate(axes):
+            t_data = target_data[:, d]
+            c_data_list = [c[:, d] for c in controls_data]
+            
+            flat_controls = []
+            flat_weights = []
+            for w, c in zip(weights, c_data_list):
+                if len(c) > 0 and w > 1e-6:
+                    flat_controls.extend(c)
+                    flat_weights.extend([w / len(c)] * len(c))
+                    
+            ax.hist(t_data, bins=30, density=True, alpha=0.5, color='black', label='Target')
+            if len(flat_controls) > 0:
+                ax.hist(flat_controls, bins=30, density=True, weights=flat_weights, alpha=0.5, color='red', label='DSC')
+                
+            ax.set_title(f'Dimension {d+1}')
+            ax.set_xlabel('Wert')
+            ax.set_ylabel('Dichte')
+            ax.legend(loc='upper right', frameon=True, edgecolor='black', framealpha=1)
+            
+            ax.spines['top'].set_visible(True)
+            ax.spines['right'].set_visible(True)
+            ax.spines['bottom'].set_visible(True)
+            ax.spines['left'].set_visible(True)
+            ax.grid(linestyle='--', alpha=0.5)
+            
+        period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+        plt.suptitle(f'Density Plot ({period_label})', fontsize=16)
+        plt.tight_layout()
+        plt.show()
+    else:
+        period_res = fit_synth.results_periods[period]
+        target_data = period_res.target.data
+        controls_data = period_res.controls.data
+        
+        flat_controls = []
+        flat_weights = []
+        for w, c in zip(weights, controls_data):
+            if len(c) > 0 and w > 1e-6:
+                flat_controls.extend(c)
+                flat_weights.extend([w / len(c)] * len(c))
+                
+        plt.figure(figsize=(8, 6))
+        plt.hist(target_data, bins=30, density=True, alpha=0.5, color='black', label='Target')
+        if len(flat_controls) > 0:
+            plt.hist(flat_controls, bins=30, density=True, weights=flat_weights, alpha=0.5, color='red', label='DSC')
+            
+        plt.title(f'Density Plot (Periode {period})', fontsize=16)
+        plt.xlabel('Wert')
+        plt.ylabel('Dichte')
+        plt.legend(loc='upper right', frameon=True, edgecolor='black', framealpha=1)
+        
+        plt.gca().spines['top'].set_visible(True)
+        plt.gca().spines['right'].set_visible(True)
+        plt.gca().spines['bottom'].set_visible(True)
+        plt.gca().spines['left'].set_visible(True)
+        plt.grid(linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        plt.show()
 
 def plot_fit_scatter2d(fit_synth, period=None):
     """
@@ -415,22 +509,16 @@ def plot_fit_scatter2d(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    period_res = fit_synth.results_periods[period]
-    target_data = period_res.target.data
+    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
-    if not is_multi:
+    if target_data.shape[1] != 2:
         print("2D Scatterplot wird nur für 2D Daten unterstützt.")
         return
         
-    weights = period_res.DiSCo.weights if period_res.DiSCo.weights is not None else fit_synth.weights
-    controls_data = [c for w, c in zip(weights, period_res.controls.data) if w > 1e-5 and len(c) > 0]
-    filtered_weights = [w for w in weights if w > 1e-5]
-    
     if len(controls_data) == 0:
         return
         
-    # Target Data
     x_t = target_data[:, 0]
     y_t = target_data[:, 1]
     
@@ -438,15 +526,22 @@ def plot_fit_scatter2d(fit_synth, period=None):
     
     N = len(target_data)
     from ..utils import sample_counterfactual_distribution
-    grid = period_res.target.grid
-    disco_dist = sample_counterfactual_distribution(period_res.controls.data, weights, grid=grid, num_samples=N)
+    first_p = period[0] if isinstance(period, list) else period
+    grid = fit_synth.results_periods[first_p].target.grid
+    
+    # Use normalized weights
+    w_sum = np.sum(weights)
+    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+    
+    disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
     
     if disco_dist is not None and len(disco_dist) > 0:
         ax.scatter(disco_dist[:, 0], disco_dist[:, 1], alpha=0.6, s=30, color='red', label='DSC (Sampled)')
         
     ax.scatter(x_t, y_t, alpha=0.7, s=30, color='black', label='Target')
     
-    ax.set_title('2D Scatterplot (Bivariate Distribution)', fontsize=14)
+    period_label = f"Perioden {period}" if isinstance(period, list) else f"Periode {period}"
+    ax.set_title(f'2D Scatterplot ({period_label})', fontsize=14)
     ax.set_xlabel('Dim 1', fontsize=12)
     ax.set_ylabel('Dim 2', fontsize=12)
     
@@ -459,7 +554,6 @@ def plot_fit_scatter2d(fit_synth, period=None):
     
     plt.tight_layout()
     plt.show()
-
 
 def plot_transport_comparison(gt_effect, tea_result, period=5, save_path=None):
     """

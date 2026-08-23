@@ -28,8 +28,8 @@ from python.tea import disco_tea
 # KONFIGURATION (Hier kannst du einfach alles einstellen)
 # =============================================================================
 METHODS_TO_RUN = ['mixture', 'swasserstein', 'energy', 'tangential']
-N_MC = 1
-NUM_WORKERS = 1
+N_MC = 25
+NUM_WORKERS = 4
 
 # Steuerung, was genau berechnet / nachberechnet werden soll
 RECALC_GT = False            # True: Ground Truth Effekte (w1, w2, energy) (neu) berechnen (Achtung: Nur für simulierte Daten mit _cf Spalten!)
@@ -38,7 +38,7 @@ RECALC_NAIVE = True          # True: Nur Naive Baseline für W2/Energy nachberec
 CALC_TRANSPORT_MAP = False   # True: Langsame Quantile/Transport Map im GT berechnen (meist nicht nötig)
 
 # Dateiname-Prefix (z.B. für die Medicaid-Daten)
-BASE_FILENAME = 'medicaid_30_2017'
+BASE_FILENAME = 'medi_hybrid_30_2017'
 # =============================================================================
 
 def process_mc_iteration(f, recalc_gt, recalc_fit, recalc_naive, calc_transport_map):
@@ -93,9 +93,9 @@ if __name__ == "__main__":
         logger.info(f"Starte Auswertung für Methode: {method} (GT={RECALC_GT}, FIT={RECALC_FIT}, NAIVE={RECALC_NAIVE})")
 
         if N_MC > 1:
-            results_files = [os.path.join(project_root, f"python/results/fits/{BASE_FILENAME}_{method}_mc{i}.pkl") for i in range(N_MC)]    
+            results_files = [os.path.join(project_root, f"python/results/fits/mc_hybrid/{BASE_FILENAME}_{method}_mc{i}.pkl") for i in range(N_MC)]    
         else:
-            results_files = [os.path.join(project_root, f"python/results/fits/{BASE_FILENAME}_{method}.pkl")]
+            results_files = [os.path.join(project_root, f"python/results/fits/mc_hybrid/{BASE_FILENAME}_{method}.pkl")]
         
         if not os.path.exists(results_files[0]):
             logger.warning(f"Fit-Dateien für {method} nicht gefunden ({results_files[0]}). Überspringe...")

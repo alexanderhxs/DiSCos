@@ -1,3 +1,4 @@
+from cvxpy.atoms import quad_form
 import os
 import pandas as pd
 
@@ -9,7 +10,8 @@ def get_medicaid_data(
     outcome_cols: list[str] = ['INCWAGE', 'UHRSWORK'],
     max_size: int = 2000,
     random_state: int = 42,
-
+    weighted: bool = False,
+    pooled: bool = False,
 ):
     """
     Loads the Medicaid dataset in right format.
@@ -29,12 +31,36 @@ def get_medicaid_data(
     df_medicaid = pd.read_csv(data_path)
     
     cols = [unit_col, time_col] + outcome_cols
+    if weighted and'PERWT' not in cols:
+        cols.append('PERWT')
+    
     df_medicaid = df_medicaid[cols]
     
     if max_size is not None:
-        df_medicaid = (df_medicaid.groupby([unit_col, time_col])
-                       .apply(lambda x: x.sample(n=min(len(x), max_size), replace=False, random_state=random_state))
-                       .reset_index(drop=False))
+        def _get_sampled_indices(x):
+            n = min(len(x), max_size)
+            if weighted:
+                weights = x['PERWT'].fillna(0)
+                if weights.sum() <= 0:
+                    raise ValueError("Invalid weights: weights sum to zero")
+            else:
+                weights = None
+            return x.sample(n=n, replace=True, random_state=random_state, weights=weights)
+
+        if not pooled:
+            df_medicaid = (df_medicaid.groupby([unit_col, time_col])
+                            .apply(_get_sampled_indices)
+                            .reset_index(drop=False))
+        else:
+            
+            df_medicaid_pre = (df_medicaid[df_medicaid[time_col] <=2016].groupby([unit_col])
+                            .apply(_get_sampled_indices)
+                            .reset_index(drop=False))
+            df_medicaid_pre[time_col] = 0
+            df_medicaid_post = (df_medicaid[df_medicaid[time_col] >2016].groupby([unit_col])
+                            .apply(_get_sampled_indices)
+                            .reset_index(drop=False))
+            df_medicaid_post[time_col] = 1
+            df_medicaid = pd.concat([df_medicaid_pre, df_medicaid_post])
     
     return df_medicaid
-    

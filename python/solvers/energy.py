@@ -122,7 +122,7 @@ class EnergySolver(BaseSolver):
         
         prob = cp.Problem(objective, constraints)
         # OSQP ist für QP-Probleme meist schneller und robuster als SCS
-        prob.solve(solver=cp.OSQP, max_iter=10000)
+        prob.solve(solver=cp.OSQP, max_iter=10000, )
         
         # Fallback auf SCS, falls OSQP (aus numerischen Gründen) scheitert
         if prob.status not in ["optimal", "optimal_inaccurate"]:
@@ -183,7 +183,15 @@ class EnergySolver(BaseSolver):
                 cf_sorted = np.sort(cf_sq)
                 disco_cdf = np.searchsorted(cf_sorted, grid_ord, side='right') / len(cf_sq)
             else:
-                disco_cdf = np.mean(np.all(counterfactual[None, :, :] <= grid_ord[:, None, :], axis=2), axis=1)
+                import logging
+                logging.getLogger(__name__).info(f"Computing counterfactual CDF on grid size {len(grid_ord)}...")
+                chunk_size = 5000
+                G_len = len(grid_ord)
+                disco_cdf = np.zeros(G_len)
+                for i in range(0, G_len, chunk_size):
+                    end = min(i + chunk_size, G_len)
+                    chunk_bools = np.all(counterfactual[None, :, :] <= grid_ord[i:end, None, :], axis=2)
+                    disco_cdf[i:end] = np.mean(chunk_bools, axis=1)
                 
             if cf_sq.ndim == 1 or (cf_sq.ndim == 2 and cf_sq.shape[1] == 1):
                 from ..utils import myQuant

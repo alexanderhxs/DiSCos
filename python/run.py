@@ -86,15 +86,18 @@ if __name__ == "__main__":
             #df = loaded_model.params.df
             df = get_continuous_data(sample_size=1000, num_controls=25, num_periods=10, dim=2, t_treat=6, seed=current_seed) # t_treat > num_periods for no treatment
         elif args.data_path == 'medicaid':
-            df = get_medicaid_data()
+            df = get_medicaid_data(
+                outcome_cols=['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID'],
+                pooled=True)
             args.id_col = 'STATEFIP'
             args.time_col = 'YEAR'
-            args.y_col = ['INCWAGE', 'UHRSWORK']
+            args.y_col = ['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID']
         elif args.data_path == 'hybrid':
             df, true_weights = get_hybrid_data('python/data/datasets/medicaid.csv', seed = mc_i)
             args.id_col = 'STATEFIP'
             args.time_col = 'YEAR'
-            args.y_col = ['INCWAGE', 'UHRSWORK']
+            args.y_col = ['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID']
+
             args.id_col_target = 'synthetic_target'
 
         else:
