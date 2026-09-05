@@ -54,7 +54,8 @@ def run_permutation_test(disco_instance, peridx=None):
             idx, c_df, t_df, 
             disco_instance.T0_idx, peridx, 
             disco_instance.results_by_period,
-            disco_instance.M, disco_instance.simplex, disco_instance.solver
+            disco_instance.M, disco_instance.simplex, disco_instance.solver,
+            disco_instance.G
         ) for idx in peridx
     )
 
@@ -73,7 +74,7 @@ def run_permutation_test(disco_instance, peridx=None):
         plot=None
     )
 
-def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, solver):
+def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, solver, G):
     """
     Run one iteration of the permutation test.
     idx is the index from peridx of the new "target" unit.
@@ -104,8 +105,7 @@ def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, 
         controls_data = [np.asarray(c) for c in perc[t][1:]]
         
         if len(target_data) > 0 and len(controls_data) > 0:
-            G_grid = len(results_by_period[t].target.grid) - 1
-            grid_min, grid_max, grid_ord = getGrid(target_data, controls_data, G_grid)
+            grid_min, grid_max, grid_ord = getGrid(target_data, controls_data, G)
 
             res = solver.fit_weights(
                 target=target_data,
@@ -130,8 +130,7 @@ def _disco_per_iter(idx, c_df, t_df, T0, peridx, results_by_period, M, simplex, 
         controls_data = [np.asarray(c) for c in perc[t][1:]]
         
         if len(target_data) > 0 and len(controls_data) > 0:
-            G_grid = len(results_by_period[t].target.grid) - 1
-            _, _, grid_ord_perm = getGrid(target_data, controls_data, G_grid)
+            _, _, grid_ord_perm = getGrid(target_data, controls_data, G)
             
             dist[i] = solver.compute_distance(
                 target=target_data,

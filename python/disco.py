@@ -12,7 +12,7 @@ from models import DiSCoResult, DiSCoParams, PeriodResult, DiSCoMethodResult, Ta
 class DiSCo:
     def __init__(self, df, id_col, time_col, y_col, id_col_target, t0, 
                  M=1000, G=100, num_cores=1, q_min=0.0, q_max=1.0, CI= False, uniform=False, perm=False, cl=0.95, B=100,
-                 mixture=False, simplex=False, seed=None, joint_opt=False, **kwargs):
+                 mixture=False, simplex=False, seed=None, joint_opt=False, weight_col=None, **kwargs):
         """
         Distributional Synthetic Controls
         
@@ -44,6 +44,7 @@ class DiSCo:
         self.mixture = mixture
         self.simplex = simplex
         self.joint_opt = joint_opt
+        self.weight_col = weight_col
         
         if isinstance(self.y_col, (list, tuple)) or len(df[self.y_col].shape) > 1:
             self.is_multivariate = True
@@ -94,8 +95,12 @@ class DiSCo:
         t0_mapped = self.df[self.df[self.time_col] == self.t0]['t_col'].unique()
         if len(t0_mapped) == 0:
             raise ValueError(f"Behandlungsjahr t0={self.t0} nicht im DataFrame gefunden!")
-        self.T0_idx = t0_mapped[0] - 1
         
+        self.T0_idx = t0_mapped[0] - 1
+        # If there is only one period (e.g. spatial barycenter problem), allow calculating weights for it
+        if self.T0_idx < 1 and len(time_stamps) == 1:
+            self.T0_idx = 1
+            
         self.periods = sorted(self.df['t_col'].unique())
         
         all_ids = self.df[self.id_col].unique()
@@ -129,16 +134,22 @@ class DiSCo:
         """
         df_t = self.df[self.df['t_col'] == t]
         
-        target_data = df_t[df_t[self.id_col] == self.id_col_target][self.y_col].values
+        target_mask = df_t[self.id_col] == self.id_col_target
+        target_data = df_t[target_mask][self.y_col].values
+        target_weights = df_t[target_mask][self.weight_col].values if self.weight_col else None
         
         if len(target_data) == 0:
             return None
             
         controls_data = []
+        controls_weights = [] if self.weight_col else None
         for cid in self.controls_id:
-            c_data = df_t[df_t[self.id_col] == cid][self.y_col].values
+            c_mask = df_t[self.id_col] == cid
+            c_data = df_t[c_mask][self.y_col].values
             if len(c_data) > 0:
                 controls_data.append(c_data)
+                if self.weight_col:
+                    controls_weights.append(df_t[c_mask][self.weight_col].values)
                 
         if len(controls_data) == 0:
             return None
@@ -182,6 +193,8 @@ class DiSCo:
             weights = self.solver.fit_weights(
                 target=target_data, 
                 controls=controls_data, 
+                target_weights=target_weights,
+                controls_weights=controls_weights,
                 grid_min=grid_min, 
                 grid_max=grid_max, 
                 grid_ord=grid_ord, 
@@ -201,13 +214,15 @@ class DiSCo:
             cdf=cdf_t,
             grid=grid_ord,
             data=target_data,
-            quantiles=target_q
+            quantiles=target_q,
+            weights=target_weights
         )
 
         controls_obj = ControlsData(
             cdf=controls_cdf,
             data=controls_data,
-            quantiles=controls_q
+            quantiles=controls_q,
+            weights=controls_weights
         )
 
         period_result = PeriodResult(
@@ -223,15 +238,23 @@ class DiSCo:
 
         #just append all pre treatment data together for target and controls, then call fit_weights_joint once
         target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values for pt in pre_treatment_periods]
+        target_weights = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.weight_col].values for pt in pre_treatment_periods] if self.weight_col else None
+        
         controls_data = []
+        controls_weights = [] if self.weight_col else None
         for cid in self.controls_id:
             c_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.y_col].values for pt in pre_treatment_periods]
             controls_data.append(c_data)
+            if self.weight_col:
+                c_weights = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.weight_col].values for pt in pre_treatment_periods]
+                controls_weights.append(c_weights)
 
         #grid_min, grid_max, grid_ord = getGrid(target_data[0], controls_data[0], self.G)
         weights = self.solver.fit_weights_joint(
                 targets_list=target_data, 
                 controls_list=controls_data, 
+                targets_weights_list=target_weights,
+                controls_weights_list=controls_weights,
                 #grid_min=grid_min, 
                 #grid_max=grid_max, 
                 #grid_ord=grid_ord, 
@@ -263,15 +286,23 @@ class DiSCo:
 
         #just append all pre treatment data together for target and controls, then call fit_weights_joint once
         target_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.y_col].values for pt in pre_treatment_periods]
+        target_weights = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == self.id_col_target)][self.weight_col].values for pt in pre_treatment_periods] if self.weight_col else None
+        
         controls_data = []
+        controls_weights = [] if self.weight_col else None
         for cid in self.controls_id:
             c_data = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.y_col].values for pt in pre_treatment_periods]
             controls_data.append(c_data)
+            if self.weight_col:
+                c_weights = [self.df.loc[(self.df['t_col'] == pt) & (self.df[self.id_col] == cid)][self.weight_col].values for pt in pre_treatment_periods]
+                controls_weights.append(c_weights)
 
         weights = self.solver.second_level_fit(
             weights=weights,
             targets_list=target_data,
-            controls_list=controls_data)
+            controls_list=controls_data,
+            targets_weights_list=target_weights,
+            controls_weights_list=controls_weights)
         return weights
 
 
@@ -332,6 +363,7 @@ class DiSCo:
                 )
                 
                 p_res.DiSCo.cdf = eval_res.get("disco_cdf", None)
+                p_res.DiSCo.samples = eval_res.get("disco_samples", None)
                 if self.is_multivariate:
                     p_res.DiSCo.quantile = None
                 else:
@@ -359,7 +391,8 @@ class DiSCo:
             qmethod=None,
             boot=self.B,
             q_min=self.q_min,
-            q_max=self.q_max
+            q_max=self.q_max,
+            weight_col=self.weight_col
         )
         
         return DiSCoResult(

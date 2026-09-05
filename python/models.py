@@ -23,21 +23,23 @@ class TargetData:
     grid: Optional[np.ndarray] = None
     data: Optional[np.ndarray] = None
     quantiles: Optional[np.ndarray] = None
+    weights: Optional[np.ndarray] = None
 
 @dataclass
 class ControlsData:
     cdf: Optional[np.ndarray] = None
     data: Optional[List[np.ndarray]] = None
     quantiles: Optional[np.ndarray] = None
+    weights: Optional[List[np.ndarray]] = None
 
 @dataclass
 class DiSCoMethodResult:
     weights: Optional[np.ndarray]
     quantile: Optional[np.ndarray] = None
     cdf: Optional[np.ndarray] = None
+    samples: Optional[np.ndarray] = None
 
 @dataclass
-
 class PeriodResult:
     DiSCo: DiSCoMethodResult
     target: TargetData
@@ -109,6 +111,7 @@ class DiSCoParams:
     boot: int
     q_min: float
     q_max: float
+    weight_col: Optional[str] = None
 
 @dataclass
 class PreTreatmentFitMetrics:

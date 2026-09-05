@@ -148,7 +148,7 @@ class SlicedWassersteinSolver(Quantile1DSolver):
                 # Early Stopping: wenn Loss-Änderung < 1e-6
                 current_loss = loss.item()
                 scheduler.step(current_loss)
-                if abs(prev_loss - current_loss) < 1e-6:
+                if abs(prev_loss - current_loss) < 1e-8:
                     break
                 prev_loss = current_loss
                 
@@ -160,10 +160,12 @@ class SlicedWassersteinSolver(Quantile1DSolver):
                 disco_cdf = None
         else:
             disco_cdf = None
+            Y_opt = None
 
         return {
             "disco_quantile": None,
-            "disco_cdf": disco_cdf
+            "disco_cdf": disco_cdf,
+            "disco_samples": Y_opt
         }
     
     def compute_distance(self, target, controls, weights, **kwargs):

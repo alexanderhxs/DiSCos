@@ -1,4 +1,3 @@
-from cvxpy.atoms import quad_form
 import os
 import pandas as pd
 

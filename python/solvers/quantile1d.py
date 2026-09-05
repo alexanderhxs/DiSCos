@@ -61,13 +61,16 @@ class Quantile1DSolver(BaseSolver):
             disco_quantile = controls_q @ weights
             bc_sorted = np.sort(disco_quantile)
             disco_cdf = np.searchsorted(bc_sorted, grid_ord, side='right') / len(bc_sorted)
+            disco_samples = disco_quantile
         else:
             disco_quantile = None
             disco_cdf = None
+            disco_samples = None
 
         return {
             "disco_quantile": disco_quantile,
-            "disco_cdf": disco_cdf
+            "disco_cdf": disco_cdf,
+            "disco_samples": disco_samples
         }
 
     def compute_distance(self, target, controls, weights, **kwargs):

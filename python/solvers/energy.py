@@ -183,9 +183,8 @@ class EnergySolver(BaseSolver):
                 cf_sorted = np.sort(cf_sq)
                 disco_cdf = np.searchsorted(cf_sorted, grid_ord, side='right') / len(cf_sq)
             else:
-                import logging
-                logging.getLogger(__name__).info(f"Computing counterfactual CDF on grid size {len(grid_ord)}...")
-                chunk_size = 5000
+                #memmory saving
+                chunk_size = kwargs.get("chunk_size", 5000)
                 G_len = len(grid_ord)
                 disco_cdf = np.zeros(G_len)
                 for i in range(0, G_len, chunk_size):
@@ -201,10 +200,12 @@ class EnergySolver(BaseSolver):
         else:
             disco_cdf = None
             disco_quantile = None
+            counterfactual = None
 
         return {
             "disco_quantile": disco_quantile,
-            "disco_cdf": disco_cdf
+            "disco_cdf": disco_cdf,
+            "disco_samples": counterfactual
         }
         
     def compute_distance(self, target, controls, weights, **kwargs):

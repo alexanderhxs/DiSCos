@@ -10,6 +10,7 @@ def _get_pooled_data(fit_synth, period):
     
     pooled_target = []
     pooled_controls = [[] for _ in range(len(weights))]
+    pooled_samples = []
     
     for p in periods_list:
         p_res = fit_synth.results_periods[p]
@@ -24,10 +25,17 @@ def _get_pooled_data(fit_synth, period):
                 c_data = c_data.reshape(-1, 1)
             pooled_controls[i].append(c_data)
             
+        if getattr(p_res.DiSCo, 'samples', None) is not None:
+            s_data = p_res.DiSCo.samples
+            if s_data.ndim == 1:
+                s_data = s_data.reshape(-1, 1)
+            pooled_samples.append(s_data)
+            
     final_target = np.vstack(pooled_target)
     final_controls = [np.vstack(c_list) if len(c_list) > 0 and sum(len(c) for c in c_list) > 0 else np.array([]) for c_list in pooled_controls]
+    final_samples = np.vstack(pooled_samples) if len(pooled_samples) > 0 else None
     
-    return final_target, final_controls, weights
+    return final_target, final_controls, weights, final_samples
 
 
 def plot_fit_quantiles(fit_synth, show_controls=False, period=None):    
@@ -35,7 +43,7 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if is_multi or isinstance(period, list):
@@ -54,10 +62,13 @@ def plot_fit_quantiles(fit_synth, show_controls=False, period=None):
             w_sum = np.sum(weights)
             norm_weights = weights / w_sum if w_sum > 1e-8 else weights
             
-            synth_cdf = np.zeros_like(grid)
-            for c_data, w in zip(c_data_list, norm_weights):
-                if w > 1e-5 and len(c_data) > 0:
-                    synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
+            if final_samples is not None:
+                synth_cdf = np.mean(final_samples[:, d][:, None] <= grid, axis=0)
+            else:
+                synth_cdf = np.zeros_like(grid)
+                for c_data, w in zip(c_data_list, norm_weights):
+                    if w > 1e-5 and len(c_data) > 0:
+                        synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                     
             q_grid = np.linspace(0, 1, 200)
             target_quantiles = np.quantile(t_data, q_grid)
@@ -159,7 +170,7 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if is_multi or isinstance(period, list):
@@ -179,10 +190,13 @@ def plot_fit_cdf(fit_synth, show_controls=False, period=None):
             norm_weights = weights / w_sum if w_sum > 1e-8 else weights
             
             target_cdf = np.mean(t_data[:, None] <= grid, axis=0)
-            synth_cdf = np.zeros_like(grid)
-            for c_data, w in zip(c_data_list, norm_weights):
-                if w > 1e-5 and len(c_data) > 0:
-                    synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
+            if final_samples is not None:
+                synth_cdf = np.mean(final_samples[:, d][:, None] <= grid, axis=0)
+            else:
+                synth_cdf = np.zeros_like(grid)
+                for c_data, w in zip(c_data_list, norm_weights):
+                    if w > 1e-5 and len(c_data) > 0:
+                        synth_cdf += w * np.mean(c_data[:, None] <= grid, axis=0)
                     
             ax.plot(grid, target_cdf, label="Target", color="black", linewidth=3)
             ax.plot(grid, synth_cdf, label="DSC", color="red", linewidth=3)
@@ -271,7 +285,7 @@ def plot_fit_copula(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if target_data.shape[1] != 2:
@@ -289,10 +303,12 @@ def plot_fit_copula(fit_synth, period=None):
     first_p = period[0] if isinstance(period, list) else period
     grid = fit_synth.results_periods[first_p].target.grid
     
-    w_sum = np.sum(weights)
-    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
-    
-    disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
+    if final_samples is not None:
+        disco_dist = final_samples
+    else:
+        w_sum = np.sum(weights)
+        norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+        disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
     
     if disco_dist is None or len(disco_dist) == 0:
         return
@@ -340,7 +356,7 @@ def plot_fit_joint_contour(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if target_data.shape[1] != 2:
@@ -353,22 +369,27 @@ def plot_fit_joint_contour(fit_synth, period=None):
     x_t = target_data[:, 0]
     y_t = target_data[:, 1]
     
-    pool_x = []
-    pool_y = []
-    pool_w = []
-    
-    w_sum = np.sum(weights)
-    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
-    
-    for c_data, w in zip(controls_data, norm_weights):
-        if len(c_data) > 0 and w > 1e-6:
-            pool_x.extend(c_data[:, 0])
-            pool_y.extend(c_data[:, 1])
-            pool_w.extend([w / len(c_data)] * len(c_data))
-            
-    pool_x = np.array(pool_x)
-    pool_y = np.array(pool_y)
-    pool_w = np.array(pool_w)
+    if final_samples is not None:
+        pool_x = final_samples[:, 0]
+        pool_y = final_samples[:, 1]
+        pool_w = np.ones(len(final_samples)) / len(final_samples)
+    else:
+        pool_x = []
+        pool_y = []
+        pool_w = []
+        
+        w_sum = np.sum(weights)
+        norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+        
+        for c_data, w in zip(controls_data, norm_weights):
+            if len(c_data) > 0 and w > 1e-6:
+                pool_x.extend(c_data[:, 0])
+                pool_y.extend(c_data[:, 1])
+                pool_w.extend([w / len(c_data)] * len(c_data))
+                
+        pool_x = np.array(pool_x)
+        pool_y = np.array(pool_y)
+        pool_w = np.array(pool_w)
     
     x_min = min(x_t.min(), pool_x.min())
     x_max = max(x_t.max(), pool_x.max())
@@ -417,7 +438,7 @@ def plot_fit_joint_contour(fit_synth, period=None):
     plt.tight_layout()
     plt.show()
 
-def plot_fit_density(fit_synth, period=None):
+def plot_fit_density(fit_synth, period=None, var_names = None):
     """
     Erstellt ein überlappendes Histogramm / Dichteplot von Target und DSC.
     Unterstützt jetzt auch das Plotten mehrerer Perioden gleichzeitig als gemeinsame Verteilung.
@@ -426,7 +447,7 @@ def plot_fit_density(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if is_multi or isinstance(period, list):
@@ -438,20 +459,27 @@ def plot_fit_density(fit_synth, period=None):
             t_data = target_data[:, d]
             c_data_list = [c[:, d] for c in controls_data]
             
-            flat_controls = []
-            flat_weights = []
-            for w, c in zip(weights, c_data_list):
-                if len(c) > 0 and w > 1e-6:
-                    flat_controls.extend(c)
-                    flat_weights.extend([w / len(c)] * len(c))
+            if final_samples is not None:
+                flat_controls = final_samples[:, d]
+                flat_weights = np.ones(len(flat_controls)) / len(flat_controls)
+            else:
+                flat_controls = []
+                flat_weights = []
+                for w, c in zip(weights, c_data_list):
+                    if len(c) > 0 and w > 1e-6:
+                        flat_controls.extend(c)
+                        flat_weights.extend([w / len(c)] * len(c))
                     
             ax.hist(t_data, bins=30, density=True, alpha=0.5, color='black', label='Target')
             if len(flat_controls) > 0:
                 ax.hist(flat_controls, bins=30, density=True, weights=flat_weights, alpha=0.5, color='red', label='DSC')
-                
-            ax.set_title(f'Dimension {d+1}')
-            ax.set_xlabel('Wert')
-            ax.set_ylabel('Dichte')
+            
+            if var_names is not None:
+                ax.set_title(f'{var_names[d]}')
+            else:
+                ax.set_title(f'Dimension {d+1}')
+            ax.set_xlabel('Value')
+            ax.set_ylabel('Density')
             ax.legend(loc='upper right', frameon=True, edgecolor='black', framealpha=1)
             
             ax.spines['top'].set_visible(True)
@@ -469,21 +497,25 @@ def plot_fit_density(fit_synth, period=None):
         target_data = period_res.target.data
         controls_data = period_res.controls.data
         
-        flat_controls = []
-        flat_weights = []
-        for w, c in zip(weights, controls_data):
-            if len(c) > 0 and w > 1e-6:
-                flat_controls.extend(c)
-                flat_weights.extend([w / len(c)] * len(c))
+        if final_samples is not None:
+            flat_controls = final_samples[:, 0] if final_samples.ndim > 1 else final_samples
+            flat_weights = np.ones(len(flat_controls)) / len(flat_controls)
+        else:
+            flat_controls = []
+            flat_weights = []
+            for w, c in zip(weights, controls_data):
+                if len(c) > 0 and w > 1e-6:
+                    flat_controls.extend(c)
+                    flat_weights.extend([w / len(c)] * len(c))
                 
         plt.figure(figsize=(8, 6))
         plt.hist(target_data, bins=30, density=True, alpha=0.5, color='black', label='Target')
         if len(flat_controls) > 0:
             plt.hist(flat_controls, bins=30, density=True, weights=flat_weights, alpha=0.5, color='red', label='DSC')
             
-        plt.title(f'Density Plot (Periode {period})', fontsize=16)
-        plt.xlabel('Wert')
-        plt.ylabel('Dichte')
+        plt.title(f'Density Plot (Period {period})', fontsize=16)
+        plt.xlabel('Value')
+        plt.ylabel('Density')
         plt.legend(loc='upper right', frameon=True, edgecolor='black', framealpha=1)
         
         plt.gca().spines['top'].set_visible(True)
@@ -509,7 +541,7 @@ def plot_fit_scatter2d(fit_synth, period=None):
     if period is None:
         period = periods[-1]
         
-    target_data, controls_data, weights = _get_pooled_data(fit_synth, period)
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
     is_multi = fit_synth.params.is_multivariate
     
     if target_data.shape[1] != 2:
@@ -525,15 +557,19 @@ def plot_fit_scatter2d(fit_synth, period=None):
     fig, ax = plt.subplots(figsize=(8, 6))
     
     N = len(target_data)
-    from ..utils import sample_counterfactual_distribution
-    first_p = period[0] if isinstance(period, list) else period
-    grid = fit_synth.results_periods[first_p].target.grid
     
-    # Use normalized weights
-    w_sum = np.sum(weights)
-    norm_weights = weights / w_sum if w_sum > 1e-8 else weights
-    
-    disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
+    if final_samples is not None:
+        disco_dist = final_samples
+    else:
+        from ..utils import sample_counterfactual_distribution
+        first_p = period[0] if isinstance(period, list) else period
+        grid = fit_synth.results_periods[first_p].target.grid
+        
+        # Use normalized weights
+        w_sum = np.sum(weights)
+        norm_weights = weights / w_sum if w_sum > 1e-8 else weights
+        
+        disco_dist = sample_counterfactual_distribution(controls_data, norm_weights, grid=grid, num_samples=N)
     
     if disco_dist is not None and len(disco_dist) > 0:
         ax.scatter(disco_dist[:, 0], disco_dist[:, 1], alpha=0.6, s=30, color='red', label='DSC (Sampled)')
@@ -648,4 +684,37 @@ def plot_transport_comparison(gt_effect, tea_result, period=5, save_path=None):
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Figure saved to {save_path}")
         
+    plt.show()
+
+def plot_fit_image(fit_synth, period=None, resolution=50):
+    periods = sorted(list(fit_synth.results_periods.keys()))
+    if period is None:
+        period = periods[-1]
+        
+    target_data, controls_data, weights, final_samples = _get_pooled_data(fit_synth, period)
+    
+    if final_samples is None:
+        print("No counterfactual samples available to plot as image.")
+        return
+        
+    if target_data.shape[1] != 2:
+        print("Image plotting is only supported for 2D spatial point clouds.")
+        return
+        
+    # Create figure with 1x2 subplots (Target vs Counterfactual)
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    
+    # Target image
+    H_t, xedges, yedges = np.histogram2d(target_data[:, 0], target_data[:, 1], bins=resolution, range=[[0, 1], [0, 1]])
+    axes[0].imshow(H_t.T, origin='lower', extent=[0, 1, 0, 1], cmap='Greys')
+    axes[0].set_title('Target')
+    axes[0].axis('off')
+    
+    # Counterfactual image
+    H_c, _, _ = np.histogram2d(final_samples[:, 0], final_samples[:, 1], bins=resolution, range=[[0, 1], [0, 1]])
+    axes[1].imshow(H_c.T, origin='lower', extent=[0, 1, 0, 1], cmap='Greys')
+    axes[1].set_title('Counterfactual Barycenter')
+    axes[1].axis('off')
+    
+    plt.tight_layout()
     plt.show()

@@ -1,4 +1,4 @@
-from data import get_medicaid_data, get_hybrid_data
+from data import get_medicaid_data, get_hybrid_data, get_image_data, get_mnist_data, get_cps_data
 import joblib
 from disco import DiSCo
 from data.data import get_continuous_data,  generate_dynamic_panel_data, create_mdsc_panel_data, generate_multivariate_panel_dgp
@@ -85,21 +85,49 @@ if __name__ == "__main__":
             #loaded_model = joblib.load('python/disco_results.pkl')
             #df = loaded_model.params.df
             df = get_continuous_data(sample_size=1000, num_controls=25, num_periods=10, dim=2, t_treat=6, seed=current_seed) # t_treat > num_periods for no treatment
+        
         elif args.data_path == 'medicaid':
             df = get_medicaid_data(
                 outcome_cols=['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID'],
-                pooled=True)
+                pooled=False,
+                weighted=True)
             args.id_col = 'STATEFIP'
             args.time_col = 'YEAR'
             args.y_col = ['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID']
+
         elif args.data_path == 'hybrid':
             df, true_weights = get_hybrid_data('python/data/datasets/medicaid.csv', seed = mc_i)
             args.id_col = 'STATEFIP'
             args.time_col = 'YEAR'
             args.y_col = ['INCWAGE', 'UHRSWORK','EMPSTAT','HINSCAID']
-
             args.id_col_target = 'synthetic_target'
 
+        elif args.data_path == 'image':
+            df = get_image_data(num_samples=20000, seed=current_seed)
+            args.id_col = 'ID'
+            args.time_col = 'TIME'
+            args.y_col = ['X', 'Y']
+            if args.id_col_target == '0':
+                args.id_col_target = '0001.png'
+        
+        elif args.data_path == 'mnist':
+            # Pass string arguments for digit and corruption
+            df = get_mnist_data(digit='4', n_controls=10, corruption='occlusion', num_samples=5000, seed=current_seed)
+            args.id_col = 'ID'
+            args.time_col = 'TIME'
+            args.y_col = ['X', 'Y']
+            args.id_col_target = 'target'
+        
+        elif args.data_path == 'cps':
+            df = get_cps_data(num_samples=2000, random_state=current_seed)
+            args.id_col = 'state'
+            args.time_col = 'year'
+            args.y_col = ['earnhre', 'uhourse']
+            # Target is state 22 by default
+            if args.id_col_target == '0':
+                args.id_col_target = 22
+            else:
+                args.id_col_target = int(args.id_col_target)
         else:
             df = pd.read_csv(args.data_path)  # Oder read_parquet, read_excel etc.
 

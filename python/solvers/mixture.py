@@ -82,18 +82,22 @@ class MixtureSolver(BaseSolver):
                     ctrl_sorted = np.sort(ctrl_sq)
                     controls_cdf[:, i] = np.searchsorted(ctrl_sorted, grid_ord, side='right') / len(ctrl_sq)
 
+        from utils import sample_counterfactual_distribution
         if len(controls_cdf) > 0 and weights is not None:
             disco_cdf = controls_cdf @ weights
             disco_quantile = None
             if grid_ord.ndim == 1 or (grid_ord.ndim == 2 and grid_ord.shape[1] == 1): 
                 disco_quantile = np.array([grid_ord[np.argmax(disco_cdf >= (y - 1e-5))] for y in evgrid])
+            disco_samples = sample_counterfactual_distribution(controls, weights, grid_ord)
         else:
             disco_cdf = None
             disco_quantile = None
+            disco_samples = None
 
         return {
             "disco_quantile": disco_quantile,
-            "disco_cdf": disco_cdf
+            "disco_cdf": disco_cdf,
+            "disco_samples": disco_samples
         }
 
     def compute_distance(self, target, controls, weights, **kwargs):
